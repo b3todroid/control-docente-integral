@@ -131,6 +131,27 @@ const dbVacia = (ciclo) => ({
   folio: 0,
 });
 
+/* Rellena lo que falte al abrir un ciclo o restaurar un respaldo viejo,
+   para que una lista ausente nunca deje la pantalla en blanco. */
+function normalizarDb(d, ciclo) {
+  const base = dbVacia(ciclo || d?.ciclo || "2026-2027");
+  const out = { ...base, ...(d || {}) };
+  ["grupos", "alumnos", "asistencias", "actividades", "entregas", "permisos",
+   "incidencias", "valoraciones", "bitacoras", "ecoems", "eventos"].forEach((k) => {
+    if (!Array.isArray(out[k])) out[k] = [];
+  });
+  out.config = { ...base.config, ...(d?.config || {}) };
+  out.config.alertas = { ...base.config.alertas, ...(d?.config?.alertas || {}) };
+  out.config.semaforo = { ...base.config.semaforo, ...(d?.config?.semaforo || {}) };
+  if (!Array.isArray(out.config.trimestres) || !out.config.trimestres.length) out.config.trimestres = base.config.trimestres;
+  out.catalogos = { ...base.catalogos, ...(d?.catalogos || {}) };
+  Object.keys(base.catalogos).forEach((k) => {
+    if (!Array.isArray(out.catalogos[k]) || !out.catalogos[k].length) out.catalogos[k] = base.catalogos[k];
+  });
+  if (typeof out.folio !== "number") out.folio = 0;
+  return out;
+}
+
 const trimestreDe = (fecha, cfg) => {
   const f = fecha || hoy();
   const t = (cfg?.trimestres || []).find((x) => x.inicio && x.fin && f >= x.inicio && f <= x.fin);
@@ -1492,7 +1513,7 @@ function Actividades({ db, upd, toast }) {
           <div className="grid sm:grid-cols-2 gap-3">
             <div className="sm:col-span-2"><Campo label="Nombre" req><Inp value={modal.nombre} onChange={(e) => setModal({ ...modal, nombre: e.target.value })} /></Campo></div>
             <Campo label="Grupo"><Sel value={modal.grupoId} onChange={(e) => setModal({ ...modal, grupoId: e.target.value })}>{db.grupos.map((g) => <option key={g.id} value={g.id}>{g.grado}° {g.grupo}</option>)}</Sel></Campo>
-            <Campo label="Instrumento de evaluación"><Sel value={modal.instrumentoId} onChange={(e) => setModal({ ...modal, instrumentoId: e.target.value })}>{db.catalogos.instrumentos.map((i) => <option key={i.id} value={i.id}>{i.nombre} ({i.porcentaje}%)</option>)}</Sel></Campo>
+            <Campo label="Instrumento de evaluación"><Sel value={modal.instrumentoId} onChange={(e) => setModal({ ...modal, instrumentoId: e.target.value })}>{(db.catalogos.instrumentos || []).map((i) => <option key={i.id} value={i.id}>{i.nombre} ({i.porcentaje}%)</option>)}</Sel></Campo>
             <Campo label="Fecha"><Inp type="date" value={modal.fecha} onChange={(e) => setModal({ ...modal, fecha: e.target.value })} /></Campo>
             <Campo label="Fecha de entrega"><Inp type="date" value={modal.fechaEntrega} onChange={(e) => setModal({ ...modal, fechaEntrega: e.target.value })} /></Campo>
             <Campo label="Trimestre"><Sel value={modal.trimestre} onChange={(e) => setModal({ ...modal, trimestre: e.target.value })}>{[1, 2, 3].map((t) => <option key={t} value={t}>Trimestre {t}</option>)}</Sel></Campo>
@@ -1976,7 +1997,7 @@ function Incidencias({ db, upd, ir, toast, params }) {
       <div className="flex gap-2 flex-wrap">
         <Sel value={fEstado} onChange={(e) => setFEstado(e.target.value)} className="max-w-[170px]"><option value="">Todos los estatus</option>{EST_INC.map((s2) => <option key={s2}>{s2}</option>)}</Sel>
         <Sel value={fGravedad} onChange={(e) => setFGravedad(e.target.value)} className="max-w-[180px]"><option value="">Toda clasificación</option>{Object.keys(GRAVEDAD).map((s2) => <option key={s2}>{s2}</option>)}</Sel>
-        <Sel value={fConducta} onChange={(e) => setFConducta(e.target.value)} className="max-w-[240px]"><option value="">Todas las conductas</option>{db.catalogos.conductas.map((s2) => <option key={s2}>{s2}</option>)}</Sel>
+        <Sel value={fConducta} onChange={(e) => setFConducta(e.target.value)} className="max-w-[240px]"><option value="">Todas las conductas</option>{(db.catalogos.conductas || []).map((s2) => <option key={s2}>{s2}</option>)}</Sel>
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -2037,7 +2058,7 @@ function Incidencias({ db, upd, ir, toast, params }) {
 
             <div className="grid sm:grid-cols-2 gap-3">
               <div className="sm:col-span-2"><Campo label="Tipo de conducta" hint="Catálogo configurable en Configuración.">
-                <Sel value={modal.conducta} onChange={(e) => setModal({ ...modal, conducta: e.target.value })}>{db.catalogos.conductas.map((c) => <option key={c}>{c}</option>)}</Sel></Campo></div>
+                <Sel value={modal.conducta} onChange={(e) => setModal({ ...modal, conducta: e.target.value })}>{(db.catalogos.conductas || []).map((c) => <option key={c}>{c}</option>)}</Sel></Campo></div>
               <div className="sm:col-span-2">
                 <p className="text-xs font-medium text-slate-600 mb-1">Clasificación</p>
                 <div className="grid grid-cols-2 gap-2">
@@ -3084,7 +3105,7 @@ function Configuracion({ db, upd, meta, setCiclo, nuevoCiclo, restaurar, toast, 
           <Card>
             <p className="text-sm font-medium text-slate-700 mb-2">Materias del simulador ECOEMS</p>
             <div className="space-y-2">
-              {cat.materiasEcoems.map((m, i) => (
+              {(cat.materiasEcoems || []).map((m, i) => (
                 <div key={m.id} className="flex gap-2 items-center">
                   <input value={m.nombre} onChange={(e) => setLista("materiasEcoems", i, { ...m, nombre: e.target.value })} className={inputCls} />
                   <input type="number" value={m.reactivos} onChange={(e) => setLista("materiasEcoems", i, { ...m, reactivos: Number(e.target.value) })} className={inputCls + " w-24"} />
@@ -3093,9 +3114,9 @@ function Configuracion({ db, upd, meta, setCiclo, nuevoCiclo, restaurar, toast, 
               ))}
             </div>
             <div className="flex justify-between items-center mt-3">
-              <Btn size="sm" tipo="secundario" icon={Plus} onClick={() => setCat({ ...cat, materiasEcoems: [...cat.materiasEcoems, { id: uid("m"), nombre: "", reactivos: 10 }] })}>Agregar materia</Btn>
-              <span className={`text-sm font-medium ${cat.materiasEcoems.reduce((s2, m) => s2 + Number(m.reactivos || 0), 0) === 128 ? "text-emerald-700" : "text-amber-600"}`}>
-                Total de aciertos: {cat.materiasEcoems.reduce((s2, m) => s2 + Number(m.reactivos || 0), 0)} {cat.materiasEcoems.reduce((s2, m) => s2 + Number(m.reactivos || 0), 0) === 128 ? "· coincide con el simulador de 128" : "· el simulador estándar son 128"}
+              <Btn size="sm" tipo="secundario" icon={Plus} onClick={() => setCat({ ...cat, materiasEcoems: [...(cat.materiasEcoems || []), { id: uid("m"), nombre: "", reactivos: 10 }] })}>Agregar materia</Btn>
+              <span className={`text-sm font-medium ${(cat.materiasEcoems || []).reduce((s2, m) => s2 + Number(m.reactivos || 0), 0) === 128 ? "text-emerald-700" : "text-amber-600"}`}>
+                Total de aciertos: {(cat.materiasEcoems || []).reduce((s2, m) => s2 + Number(m.reactivos || 0), 0)} {(cat.materiasEcoems || []).reduce((s2, m) => s2 + Number(m.reactivos || 0), 0) === 128 ? "· coincide con el simulador de 128" : "· el simulador estándar son 128"}
               </span>
             </div>
           </Card>
@@ -3103,14 +3124,14 @@ function Configuracion({ db, upd, meta, setCiclo, nuevoCiclo, restaurar, toast, 
             <p className="text-sm font-medium text-slate-700 mb-2">Catálogo de conductas · Marco para la Convivencia Escolar</p>
             <p className="text-xs text-slate-500 mb-3">Actualízalo cuando cambie la normativa aplicable en tu entidad.</p>
             <div className="space-y-2">
-              {cat.conductas.map((t, i) => (
+              {(cat.conductas || []).map((t, i) => (
                 <div key={i} className="flex gap-2 items-center">
                   <input value={t} onChange={(e) => setLista("conductas", i, e.target.value)} className={inputCls} />
                   <button onClick={() => setCat({ ...cat, conductas: cat.conductas.filter((_, j) => j !== i) })} className="p-2 text-rose-500 hover:bg-rose-50 rounded-lg"><Trash2 size={15} /></button>
                 </div>
               ))}
             </div>
-            <div className="mt-3"><Btn size="sm" tipo="secundario" icon={Plus} onClick={() => setCat({ ...cat, conductas: [...cat.conductas, ""] })}>Agregar conducta</Btn></div>
+            <div className="mt-3"><Btn size="sm" tipo="secundario" icon={Plus} onClick={() => setCat({ ...cat, conductas: [...(cat.conductas || []), ""] })}>Agregar conducta</Btn></div>
           </Card>
           <Card>
             <p className="text-sm font-medium text-slate-700 mb-2">Materias</p>
@@ -3128,27 +3149,14 @@ function Configuracion({ db, upd, meta, setCiclo, nuevoCiclo, restaurar, toast, 
           <Card>
             <p className="text-sm font-medium text-slate-700 mb-2">Tipos de actividad</p>
             <div className="flex flex-wrap gap-2">
-              {cat.tiposActividad.map((t, i) => (
+              {(cat.tiposActividad || []).map((t, i) => (
                 <span key={i} className="inline-flex items-center gap-1 bg-slate-100 border border-slate-200 rounded-lg px-2 py-1 text-xs">
                   {t}<button onClick={() => setCat({ ...cat, tiposActividad: cat.tiposActividad.filter((_, j) => j !== i) })} className="text-slate-400 hover:text-rose-500"><X size={12} /></button>
                 </span>
               ))}
             </div>
             <div className="flex gap-2 mt-3">
-              <input id="nuevoTipoAct" placeholder="Nuevo tipo" className={inputCls} onKeyDown={(e) => { if (e.key === "Enter" && e.target.value) { setCat({ ...cat, tiposActividad: [...cat.tiposActividad, e.target.value] }); e.target.value = ""; } }} />
-            </div>
-          </Card>
-          <Card>
-            <p className="text-sm font-medium text-slate-700 mb-2">Tipos de incidencia</p>
-            <div className="flex flex-wrap gap-2">
-              {cat.tiposIncidencia.map((t, i) => (
-                <span key={i} className="inline-flex items-center gap-1 bg-slate-100 border border-slate-200 rounded-lg px-2 py-1 text-xs">
-                  {t}<button onClick={() => setCat({ ...cat, tiposIncidencia: cat.tiposIncidencia.filter((_, j) => j !== i) })} className="text-slate-400 hover:text-rose-500"><X size={12} /></button>
-                </span>
-              ))}
-            </div>
-            <div className="flex gap-2 mt-3">
-              <input placeholder="Nuevo tipo" className={inputCls} onKeyDown={(e) => { if (e.key === "Enter" && e.target.value) { setCat({ ...cat, tiposIncidencia: [...cat.tiposIncidencia, e.target.value] }); e.target.value = ""; } }} />
+              <input id="nuevoTipoAct" placeholder="Nuevo tipo" className={inputCls} onKeyDown={(e) => { if (e.key === "Enter" && e.target.value) { setCat({ ...cat, tiposActividad: [...(cat.tiposActividad || []), e.target.value] }); e.target.value = ""; } }} />
             </div>
           </Card>
           <div className="flex justify-end"><Btn icon={Save} onClick={guardarCat}>Guardar catálogos</Btn></div>
@@ -3337,6 +3345,44 @@ function Buscador({ db, ir, cerrar }) {
 }
 
 /* ============================================================
+   RED DE SEGURIDAD
+   Si una pantalla falla, se muestra un aviso en lugar de quedar
+   en blanco. Los datos guardados no se tocan.
+   ============================================================ */
+class Salvavidas extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { console.error("Pantalla con error:", error, info); }
+  componentDidUpdate(prev) { if (prev.vista !== this.props.vista && this.state.error) this.setState({ error: null }); }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <Card className="border-amber-300 bg-amber-50">
+        <div className="flex items-start gap-3">
+          <AlertTriangle size={20} className="text-amber-600 shrink-0 mt-0.5" />
+          <div className="grow">
+            <p className="font-medium text-amber-900">Esta pantalla no se pudo mostrar</p>
+            <p className="text-sm text-amber-800 mt-1">
+              Tu información está a salvo: no se perdió ni se modificó nada. Es una falla del programa en esta sección.
+            </p>
+            <p className="text-xs text-amber-700 mt-2 font-mono bg-white/60 border border-amber-200 rounded p-2 break-words">
+              {String(this.state.error?.message || this.state.error)}
+            </p>
+            <p className="text-sm text-amber-800 mt-2">
+              Toma una foto de este mensaje y mándala para corregirlo. Mientras tanto puedes usar las demás secciones.
+            </p>
+            <div className="flex gap-2 mt-3">
+              <Btn size="sm" onClick={() => this.props.ir("inicio")}>Volver al inicio</Btn>
+              <Btn size="sm" tipo="secundario" onClick={() => this.setState({ error: null })}>Reintentar</Btn>
+            </div>
+          </div>
+        </div>
+      </Card>
+    );
+  }
+}
+
+/* ============================================================
    APLICACIÓN
    ============================================================ */
 const MENU = [
@@ -3397,8 +3443,7 @@ export default function App() {
         setMeta(m); setDb(demo); setCargando(false);
         return;
       }
-      let d = await sGet(K_CICLO(m.activo));
-      if (!d) d = dbVacia(m.activo);
+      let d = normalizarDb(await sGet(K_CICLO(m.activo)), m.activo);
       if (m.perfil && PERFILES[m.perfil]) setPerfilEstado(m.perfil);
       setMeta(m); setDb(d); setCargando(false);
     })();
@@ -3439,7 +3484,7 @@ export default function App() {
   const menuVisible = PERFILES[perfil]?.modulos ? MENU.filter((m) => PERFILES[perfil].modulos.includes(m.id) || m.id === "configuracion") : MENU;
 
   const setCiclo = async (ciclo) => {
-    const d = (await sGet(K_CICLO(ciclo))) || dbVacia(ciclo);
+    const d = normalizarDb(await sGet(K_CICLO(ciclo)), ciclo);
     const m = { ...meta, activo: ciclo };
     await sSet(K_META, m);
     setMeta(m); setDb(d); ir("inicio"); toast(`Ciclo ${ciclo} abierto`);
@@ -3454,7 +3499,8 @@ export default function App() {
     await sSet(K_CICLO(ciclo), d); await sSet(K_META, m);
     setMeta(m); setDb(d); ir("inicio"); toast(`Ciclo ${ciclo} creado`);
   };
-  const restaurar = async (nuevo) => {
+  const restaurar = async (datos) => {
+    const nuevo = normalizarDb(datos, datos?.ciclo);
     const m = meta.ciclos.includes(nuevo.ciclo) ? { ...meta, activo: nuevo.ciclo } : { ciclos: [...meta.ciclos, nuevo.ciclo], activo: nuevo.ciclo };
     await sSet(K_CICLO(nuevo.ciclo), nuevo); await sSet(K_META, m);
     setMeta(m); setDb(nuevo); ir("inicio"); toast("Respaldo restaurado");
@@ -3529,7 +3575,9 @@ export default function App() {
         {menuAbierto && <div className="lg:hidden fixed inset-0 top-14 bg-slate-900/30 z-10" onClick={() => setMenuAbierto(false)} />}
 
         {/* Contenido */}
-        <main className="grow min-w-0 p-3 sm:p-5 pb-24 lg:pb-8 max-w-6xl">{pantallas[vista] || pantallas.inicio}</main>
+        <main className="grow min-w-0 p-3 sm:p-5 pb-24 lg:pb-8 max-w-6xl">
+          <Salvavidas vista={vista} ir={ir}>{pantallas[vista] || pantallas.inicio}</Salvavidas>
+        </main>
       </div>
 
       {/* Navegación inferior en celular */}
