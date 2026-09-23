@@ -1,0 +1,24 @@
+{
+  "name": "Control Docente Integral",
+  "short_name": "Control Docente",
+  "description": "Control docente de grupos de secundaria: asistencia, evaluación, actividades, convivencia escolar y simulador ECOEMS.",
+  "lang": "es-MX",
+  "dir": "ltr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f8fafc",
+  "theme_color": "#047857",
+  "categories": ["education", "productivity"],
+  "icons": [
+    { "src": "./icono-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icono-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./icono-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Pasar lista", "short_name": "Asistencia", "url": "./?ir=asistencia", "icons": [{ "src": "./icono-192.png", "sizes": "192x192" }] },
+    { "name": "Registrar incidencia", "short_name": "Incidencia", "url": "./?ir=incidencias", "icons": [{ "src": "./icono-192.png", "sizes": "192x192" }] },
+    { "name": "Bitácora de clase", "short_name": "Bitácora", "url": "./?ir=bitacora", "icons": [{ "src": "./icono-192.png", "sizes": "192x192" }] }
+  ]
+}
