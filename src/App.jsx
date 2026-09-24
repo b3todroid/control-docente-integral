@@ -42,6 +42,13 @@ const EST_INC = ["Abierta", "En seguimiento", "Cerrada"];
 const EST_ACT = ["Pendiente", "Entregada", "Fuera de tiempo", "No entregada"];
 const EST_BIT = ["Concluida", "Parcialmente concluida", "Reprogramada", "Suspendida"];
 const EST_ALUMNO = ["Activo", "Baja", "Traslado"];
+const CALIFS = [5, 6, 7, 8, 9, 10];        // escala de la boleta
+const MAX_MATERIAS_BOLETA = 11;
+const MATERIAS_SUGERIDAS = {
+  1: ["Español", "Matemáticas", "Biología", "Historia", "Geografía", "Formación Cívica y Ética", "Inglés", "Artes", "Educación Física", "Tecnología", "Tutoría"],
+  2: ["Español", "Matemáticas", "Física", "Historia", "Formación Cívica y Ética", "Inglés", "Artes", "Educación Física", "Tecnología", "Tutoría"],
+  3: ["Español", "Matemáticas", "Química", "Historia", "Formación Cívica y Ética", "Inglés", "Artes", "Educación Física", "Tecnología", "Tutoría"],
+};
 const CIRC_OPC = ["Sí", "No", "No se puede determinar", "No aplica"];
 const CAMPOS_FORM = ["Lenguajes", "Saberes y Pensamiento Científico", "Ética, Naturaleza y Sociedades", "De lo Humano y lo Comunitario"];
 const EJES = ["Inclusión", "Pensamiento crítico", "Interculturalidad crítica", "Igualdad de género", "Vida saludable", "Apropiación de las culturas a través de la lectura y la escritura", "Artes y experiencias estéticas"];
@@ -156,6 +163,13 @@ function normalizarDb(d, ciclo) {
   if (typeof out.folio !== "number") out.folio = 0;
   out.alumnos = out.alumnos.map((a) => ({
     ingresoOpcion: "", ingresoFolio: "", ingresoPuntaje: "", ingresoEscuela: "", ingresoObs: "", ...a,
+    boleta: a.boleta && typeof a.boleta === "object" ? a.boleta : {},
+  }));
+  out.grupos = out.grupos.map((g) => ({
+    ...g,
+    materiasBoleta: Array.isArray(g.materiasBoleta)
+      ? g.materiasBoleta
+      : (MATERIAS_SUGERIDAS[Number(g.grado)] || []).slice(0, MAX_MATERIAS_BOLETA).map((n) => ({ id: uid("mb"), nombre: n })),
   }));
   return out;
 }
@@ -433,6 +447,20 @@ const Tabla = ({ cols, children }) => (
   </div>
 );
 
+/* Selector de calificación: se toca, no se teclea. */
+const SelectorCalif = ({ valor, onChange, compacto = false }) => (
+  <div className={`flex ${compacto ? "gap-0.5" : "gap-1"}`}>
+    {CALIFS.map((c) => (
+      <button key={c} type="button" onClick={() => onChange(valor === c ? "" : c)}
+        aria-label={`Calificación ${c}`}
+        className={`cifras ${compacto ? "w-7 h-7 text-xs" : "w-9 h-9 text-sm"} rounded-md font-bold transition-colors ${
+          valor === c ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}>
+        {c}
+      </button>
+    ))}
+  </div>
+);
+
 /* ============================================================
    CÁLCULOS AUTOMÁTICOS (no editables desde la interfaz)
    ============================================================ */
@@ -520,6 +548,28 @@ function historialEcoems(db, alumnoId) {
   const ini = items[0]?.porcentaje || 0;
   const act = items[items.length - 1]?.porcentaje || 0;
   return { items, inicial: ini, actual: act, diferencia: round(act - ini, 1), avance: ini > 0 ? round(((act - ini) / ini) * 100, 1) : 0 };
+}
+
+/* Boleta del grupo: calificaciones que captura el tutor, no las que
+   calcula la app. Una materia sin capturar no cuenta en el promedio. */
+function materiasBoleta(grupo) {
+  return Array.isArray(grupo?.materiasBoleta) ? grupo.materiasBoleta : [];
+}
+function califMateria(alumno, materiaId, t) {
+  const v = alumno?.boleta?.[materiaId]?.["t" + t];
+  return v === "" || v === undefined || v === null ? null : Number(v);
+}
+function promedioMateria(alumno, materiaId) {
+  const cs = [1, 2, 3].map((t) => califMateria(alumno, materiaId, t)).filter((x) => x !== null);
+  return cs.length ? round(cs.reduce((a, b) => a + b, 0) / cs.length, 1) : null;
+}
+function promedioBoleta(alumno, grupo) {
+  const ps = materiasBoleta(grupo).map((m) => promedioMateria(alumno, m.id)).filter((x) => x !== null);
+  return ps.length ? round(ps.reduce((a, b) => a + b, 0) / ps.length, 1) : null;
+}
+function promedioTrimestreBoleta(alumno, grupo, t) {
+  const cs = materiasBoleta(grupo).map((m) => califMateria(alumno, m.id, t)).filter((x) => x !== null);
+  return cs.length ? round(cs.reduce((a, b) => a + b, 0) / cs.length, 1) : null;
 }
 
 /* Proceso de ingreso a media superior, solo para tercero.
@@ -747,7 +797,11 @@ function Grupos({ db, upd, ir, toast }) {
     if (dup) return toast("Ese grupo ya existe en este ciclo", "error");
     upd((d) => {
       if (modal.id) { const i = d.grupos.findIndex((g) => g.id === modal.id); d.grupos[i] = { ...modal, grado: Number(modal.grado) }; }
-      else d.grupos.push({ ...modal, id: uid("grp"), grado: Number(modal.grado) });
+      else {
+        const grado = Number(modal.grado);
+        d.grupos.push({ ...modal, id: uid("grp"), grado,
+          materiasBoleta: (MATERIAS_SUGERIDAS[grado] || []).slice(0, MAX_MATERIAS_BOLETA).map((n) => ({ id: uid("mb"), nombre: n })) });
+      }
     });
     setModal(null); toast("Grupo guardado");
   };
@@ -1054,6 +1108,18 @@ function Ficha({ db, ir, params, toast }) {
         ],
       },
       secciones: [
+        ...(materiasBoleta(g).length ? [{
+          titulo: "Calificaciones por materia",
+          columnas: ["Materia", "Trim. 1", "Trim. 2", "Trim. 3", "Promedio"],
+          filas: [
+            ...materiasBoleta(g).map((m) => [m.nombre,
+              califMateria(a, m.id, 1) ?? "—", califMateria(a, m.id, 2) ?? "—", califMateria(a, m.id, 3) ?? "—",
+              promedioMateria(a, m.id) ?? "—"]),
+            ["PROMEDIO GENERAL",
+              promedioTrimestreBoleta(a, g, 1) ?? "—", promedioTrimestreBoleta(a, g, 2) ?? "—", promedioTrimestreBoleta(a, g, 3) ?? "—",
+              promedioBoleta(a, g) ?? "—"],
+          ],
+        }] : []),
         { titulo: "Asistencia",
           columnas: ["Clases", "Asistencias", "Faltas", "Justificadas", "Retardos", "Permisos", "Porcentaje"],
           filas: [[asis.total, asis.A, asis.F, asis.J, asis.R, asis.P, asis.porcentaje + "%"]] },
@@ -1110,7 +1176,7 @@ function Ficha({ db, ir, params, toast }) {
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-4">
           <div className="bg-emerald-50 border border-emerald-100 rounded-lg p-2.5"><p className="text-[11px] text-emerald-800">Asistencia</p><p className="text-xl font-semibold text-emerald-800">{asis.total ? asis.porcentaje + "%" : "—"}</p></div>
-          <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5"><p className="text-[11px] text-slate-600">Promedio</p><p className="text-xl font-semibold text-slate-800">{acum || "—"}</p></div>
+          <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5"><p className="text-[11px] text-slate-600">Promedio boleta</p><p className="cifras text-xl font-bold text-slate-800">{promedioBoleta(a, g) ?? acum ?? "—"}</p></div>
           <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5"><p className="text-[11px] text-slate-600">Entregas</p><p className="text-xl font-semibold text-slate-800">{act.entregadas}/{act.asignadas}</p></div>
           <div className="bg-sky-50 border border-sky-100 rounded-lg p-2.5"><p className="text-[11px] text-sky-800">ECOEMS</p><p className="text-xl font-semibold text-sky-800">{eco.items.length ? eco.actual + "%" : "—"}</p></div>
         </div>
@@ -1134,7 +1200,7 @@ function Ficha({ db, ir, params, toast }) {
 
       <Tabs activa={tab} set={setTab} tabs={[
         { id: "academico", label: "Académico" }, { id: "asistencia", label: "Asistencia" }, { id: "actividades", label: "Actividades" },
-        { id: "incidencias", label: "Incidencias" }, { id: "permisos", label: "Permisos" }, { id: "ecoems", label: "ECOEMS" },
+        { id: "boleta", label: "Boleta" }, { id: "incidencias", label: "Incidencias" }, { id: "permisos", label: "Permisos" }, { id: "ecoems", label: "ECOEMS" },
         ...(g && Number(g.grado) === 3 ? [{ id: "ingreso", label: "Ingreso" }] : []),
       ]} />
 
@@ -1181,6 +1247,28 @@ function Ficha({ db, ir, params, toast }) {
                 <td className="py-2 px-3 font-medium">{e && e.estado !== "Pendiente" ? e.calificacion : "—"}</td></tr>;
             })}
           </Tabla>
+        </Card>
+      )}
+
+      {tab === "boleta" && (
+        <Card>
+          {materiasBoleta(g).length === 0 ? <Vacio texto="Este grupo todavía no tiene materias cargadas." accion={<Btn onClick={() => ir("evaluacion")}>Ir a Evaluación</Btn>} /> : (
+            <Tabla cols={["Materia", "T1", "T2", "T3", "Promedio"]}>
+              {materiasBoleta(g).map((m) => { const pr = promedioMateria(a, m.id);
+                return (
+                  <tr key={m.id} className="hover:bg-slate-50">
+                    <td className="py-2 px-3">{m.nombre}</td>
+                    {[1, 2, 3].map((t) => <td key={t} className="py-2 px-3 text-slate-700">{califMateria(a, m.id, t) ?? "—"}</td>)}
+                    <td className={`py-2 px-3 ${pr === null ? "text-slate-400" : pr < 6 ? "text-rose-700 font-bold" : "font-semibold"}`}>{pr ?? "—"}</td>
+                  </tr>
+                ); })}
+              <tr className="bg-slate-100">
+                <td className="py-2 px-3 font-semibold">Promedio general</td>
+                {[1, 2, 3].map((t) => <td key={t} className="py-2 px-3 font-semibold">{promedioTrimestreBoleta(a, g, t) ?? "—"}</td>)}
+                <td className="py-2 px-3 font-bold">{promedioBoleta(a, g) ?? "—"}</td>
+              </tr>
+            </Tabla>
+          )}
         </Card>
       )}
 
@@ -1643,6 +1731,7 @@ function Evaluacion({ db, upd, ir, toast }) {
   const [grupoId, setGrupoId] = useState(db.grupos[0]?.id || "");
   const [trim, setTrim] = useState(db.config.trimestre);
   const [editIns, setEditIns] = useState(false);
+  const [vista, setVista] = useState("miMateria");
   const [ins, setIns] = useState(db.catalogos.instrumentos);
   const alumnos = sortAl(db.alumnos.filter((a) => a.grupoId === grupoId && a.activo));
   const suma = ins.reduce((s, i) => s + Number(i.porcentaje || 0), 0);
@@ -1678,12 +1767,24 @@ function Evaluacion({ db, upd, ir, toast }) {
 
   return (
     <div className="space-y-4">
-      <Titulo sub="La calificación se calcula sola con las actividades y los porcentajes configurados."
-        right={<div className="flex gap-2"><Btn size="sm" tipo="secundario" icon={FileDown} onClick={pdfEvaluacion}>PDF</Btn><Btn size="sm" tipo="secundario" icon={Download} onClick={exportar}>Excel</Btn><Btn size="sm" tipo="secundario" icon={Settings} onClick={() => { setIns(clone(db.catalogos.instrumentos)); setEditIns(true); }}>Porcentajes</Btn></div>}>Evaluación</Titulo>
+      <Titulo sub={vista === "miMateria"
+        ? "La calificación de tu materia se calcula sola con las actividades y los porcentajes configurados."
+        : "Calificaciones de todas las materias que cursa el grupo, para el tutor."}>Evaluación</Titulo>
+
+      <Tabs activa={vista} set={setVista} tabs={[{ id: "miMateria", label: "Mi materia" }, { id: "boleta", label: "Boleta del grupo" }]} />
+
       <div className="flex gap-2 flex-wrap">
         <Sel value={grupoId} onChange={(e) => setGrupoId(e.target.value)} className="max-w-[170px]">{db.grupos.map((x) => <option key={x.id} value={x.id}>{x.grado}° {x.grupo}</option>)}</Sel>
-        <Sel value={trim} onChange={(e) => setTrim(Number(e.target.value))} className="max-w-[150px]">{[1, 2, 3].map((t) => <option key={t} value={t}>Trimestre {t}</option>)}</Sel>
+        {vista === "miMateria" && <Sel value={trim} onChange={(e) => setTrim(Number(e.target.value))} className="max-w-[150px]">{[1, 2, 3].map((t) => <option key={t} value={t}>Trimestre {t}</option>)}</Sel>}
+        {vista === "miMateria" && <div className="flex gap-2 grow justify-end">
+          <Btn size="sm" tipo="secundario" icon={FileDown} onClick={pdfEvaluacion}>PDF</Btn>
+          <Btn size="sm" tipo="secundario" icon={Download} onClick={exportar}>Excel</Btn>
+          <Btn size="sm" tipo="secundario" icon={Settings} onClick={() => { setIns(clone(db.catalogos.instrumentos)); setEditIns(true); }}>Porcentajes</Btn>
+        </div>}
       </div>
+
+      {vista === "boleta" && <Boleta db={db} upd={upd} ir={ir} toast={toast} grupoId={grupoId} />}
+      {vista === "miMateria" && (<>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <Stat label="Promedio del grupo" valor={promGrupo || "—"} color="text-emerald-700" />
@@ -1708,6 +1809,8 @@ function Evaluacion({ db, upd, ir, toast }) {
         )}
       </Card>
 
+      </>)}
+
       <Modal open={editIns} onClose={() => setEditIns(false)} title="Instrumentos y porcentajes" ancho="max-w-lg"
         footer={<><Btn tipo="secundario" onClick={() => setEditIns(false)}>Cancelar</Btn><Btn icon={Save} onClick={guardarIns}>Guardar</Btn></>}>
         <div className="space-y-2">
@@ -1725,6 +1828,213 @@ function Evaluacion({ db, upd, ir, toast }) {
           </div>
         </div>
       </Modal>
+    </div>
+  );
+}
+
+
+/* ============================================================
+   BOLETA DEL GRUPO
+   Las calificaciones de todas las materias que cursa el grupo,
+   capturadas por el tutor. Se eligen con botón, del 5 al 10.
+   ============================================================ */
+function Boleta({ db, upd, ir, toast, grupoId }) {
+  const [modo, setModo] = useState("concentrado");
+  const [materiaId, setMateriaId] = useState("");
+  const [trim, setTrim] = useState(db.config.trimestre || 1);
+  const [alumnoId, setAlumnoId] = useState("");
+  const [editMat, setEditMat] = useState(null);
+  const g = db.grupos.find((x) => x.id === grupoId);
+  const alumnos = sortAl(db.alumnos.filter((a) => a.grupoId === grupoId && a.activo));
+  const materias = materiasBoleta(g);
+
+  useEffect(() => { if (!materiaId && materias[0]) setMateriaId(materias[0].id); }, [grupoId, materias.length]);
+  useEffect(() => { setAlumnoId(alumnos[0]?.id || ""); }, [grupoId]);
+
+  const setCalif = (alId, matId, t, valor) => upd((d) => {
+    const i = d.alumnos.findIndex((a) => a.id === alId);
+    if (i < 0) return;
+    const b = { ...(d.alumnos[i].boleta || {}) };
+    b[matId] = { ...(b[matId] || {}), ["t" + t]: valor };
+    d.alumnos[i].boleta = b;
+  });
+
+  const guardarMaterias = () => {
+    const limpias = editMat.filter((m) => m.nombre.trim()).slice(0, MAX_MATERIAS_BOLETA);
+    upd((d) => { const i = d.grupos.findIndex((x) => x.id === grupoId); if (i >= 0) d.grupos[i].materiasBoleta = limpias; });
+    setEditMat(null); toast("Materias guardadas");
+  };
+
+  const promGrupoMateria = (matId) => {
+    const ps = alumnos.map((a) => promedioMateria(a, matId)).filter((x) => x !== null);
+    return ps.length ? round(ps.reduce((x, y) => x + y, 0) / ps.length, 1) : null;
+  };
+  const promGeneral = (() => {
+    const ps = alumnos.map((a) => promedioBoleta(a, g)).filter((x) => x !== null);
+    return ps.length ? round(ps.reduce((x, y) => x + y, 0) / ps.length, 1) : null;
+  })();
+  const tonoCalif = (v) => v === null ? "text-slate-400" : v < 6 ? "text-rose-700 font-bold" : v >= 9 ? "text-emerald-700 font-bold" : "text-slate-900 font-semibold";
+
+  const pdfConcentrado = () => {
+    pdfTabla({
+      titulo: "Boleta del grupo",
+      subtitulo: [g ? `${g.grado}° ${g.grupo}` : "", `Tutor(a): ${db.config.docente || "—"}`].filter(Boolean).join("   ·   "),
+      columnas: ["No.", "Nombre", ...materias.map((m) => m.nombre), "Promedio"],
+      filas: alumnos.map((a) => [a.numLista, nomComp(a), ...materias.map((m) => promedioMateria(a, m.id) ?? "—"), promedioBoleta(a, g) ?? "—"]),
+      config: db.config, ciclo: db.ciclo,
+      resumen: [{ label: "Estudiantes", valor: alumnos.length },
+        { label: "Materias", valor: materias.length },
+        { label: "Promedio del grupo", valor: promGeneral ?? "—" }],
+      nota: "Promedio de los tres trimestres por materia. Una materia sin calificación capturada no cuenta en el promedio.",
+    });
+    toast("PDF descargado");
+  };
+
+  if (!g) return <Card><Vacio texto="Selecciona un grupo." /></Card>;
+
+  if (materias.length === 0) {
+    return (
+      <Card>
+        <Vacio texto={`El grupo ${g.grado}° ${g.grupo} todavía no tiene materias cargadas.`}
+          accion={<Btn icon={Plus} onClick={() => setEditMat((MATERIAS_SUGERIDAS[Number(g.grado)] || []).map((n) => ({ id: uid("mb"), nombre: n })))}>Cargar materias</Btn>} />
+        <Modal open={!!editMat} onClose={() => setEditMat(null)} title="Materias del grupo" ancho="max-w-lg"
+          footer={<><Btn tipo="secundario" onClick={() => setEditMat(null)}>Cancelar</Btn><Btn icon={Save} onClick={guardarMaterias}>Guardar</Btn></>}>
+          {editMat && <EditorMaterias lista={editMat} set={setEditMat} />}
+        </Modal>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-2 flex-wrap items-center">
+        <Tabs activa={modo} set={setModo} tabs={[{ id: "concentrado", label: "Concentrado" }, { id: "porMateria", label: "Por materia" }, { id: "porAlumno", label: "Por alumno" }]} />
+        <div className="grow" />
+        <Btn size="sm" tipo="secundario" icon={Settings} onClick={() => setEditMat(clone(materias))}>Materias</Btn>
+        <Btn size="sm" tipo="secundario" icon={FileDown} onClick={pdfConcentrado}>PDF</Btn>
+      </div>
+
+      {modo === "concentrado" && (
+        <>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            <Stat label="Materias cargadas" valor={`${materias.length}/${MAX_MATERIAS_BOLETA}`} />
+            <Stat label="Promedio del grupo" valor={promGeneral ?? "—"} color="text-sky-700" />
+            <Stat label="Abajo de 6" valor={alumnos.filter((a) => { const p = promedioBoleta(a, g); return p !== null && p < 6; }).length} color="text-rose-700" />
+          </div>
+          <Card pad={false} className="p-4">
+            <Tabla cols={["No.", "Nombre", ...materias.map((m) => m.nombre.length > 12 ? m.nombre.slice(0, 11) + "…" : m.nombre), "Prom."]}>
+              {alumnos.map((a) => (
+                <tr key={a.id} className="hover:bg-slate-50">
+                  <td className="py-2 px-3 text-slate-500">{a.numLista}</td>
+                  <td className="py-2 px-3"><button onClick={() => ir("ficha", { alumnoId: a.id })} className="hover:text-sky-700 text-left">{nomComp(a)}</button></td>
+                  {materias.map((m) => { const v = promedioMateria(a, m.id); return <td key={m.id} className={`py-2 px-3 ${tonoCalif(v)}`}>{v ?? "—"}</td>; })}
+                  <td className={`py-2 px-3 ${tonoCalif(promedioBoleta(a, g))}`}>{promedioBoleta(a, g) ?? "—"}</td>
+                </tr>
+              ))}
+              <tr className="bg-slate-100">
+                <td className="py-2 px-3" /><td className="py-2 px-3 font-semibold">Promedio del grupo</td>
+                {materias.map((m) => <td key={m.id} className="py-2 px-3 font-semibold">{promGrupoMateria(m.id) ?? "—"}</td>)}
+                <td className="py-2 px-3 font-bold">{promGeneral ?? "—"}</td>
+              </tr>
+            </Tabla>
+          </Card>
+        </>
+      )}
+
+      {modo === "porMateria" && (
+        <>
+          <Card>
+            <div className="grid sm:grid-cols-2 gap-3">
+              <Campo label="Materia"><Sel value={materiaId} onChange={(e) => setMateriaId(e.target.value)}>{materias.map((m) => <option key={m.id} value={m.id}>{m.nombre}</option>)}</Sel></Campo>
+              <Campo label="Trimestre"><Sel value={trim} onChange={(e) => setTrim(Number(e.target.value))}>{[1, 2, 3].map((t) => <option key={t} value={t}>Trimestre {t}</option>)}</Sel></Campo>
+            </div>
+          </Card>
+          <Card pad={false} className="p-2 sm:p-3">
+            <div className="divide-y divide-slate-200">
+              {alumnos.map((a) => (
+                <div key={a.id} className="py-2 px-1 flex items-center gap-2 flex-wrap">
+                  <span className="cifras w-6 text-xs font-semibold text-slate-500 shrink-0">{a.numLista}</span>
+                  <span className="grow min-w-[110px] text-sm font-medium text-slate-900">{nomComp(a)}</span>
+                  <SelectorCalif valor={califMateria(a, materiaId, trim)} onChange={(v) => setCalif(a.id, materiaId, trim, v)} />
+                </div>
+              ))}
+            </div>
+          </Card>
+          <Aviso>Toca la calificación para ponerla y tócala otra vez para quitarla. Se guarda sola.</Aviso>
+        </>
+      )}
+
+      {modo === "porAlumno" && (
+        <>
+          <Card>
+            <Campo label="Estudiante"><Sel value={alumnoId} onChange={(e) => setAlumnoId(e.target.value)}>{alumnos.map((a) => <option key={a.id} value={a.id}>{a.numLista}. {nomComp(a)}</option>)}</Sel></Campo>
+          </Card>
+          {(() => {
+            const al = alumnos.find((x) => x.id === alumnoId);
+            if (!al) return <Card><Vacio texto="Selecciona un estudiante." /></Card>;
+            return (
+              <>
+                <Card pad={false} className="p-3">
+                  <div className="space-y-3">
+                    {materias.map((m) => (
+                      <div key={m.id} className="border-b border-slate-200 last:border-0 pb-3 last:pb-0">
+                        <div className="flex items-baseline justify-between mb-2">
+                          <span className="text-sm font-semibold text-slate-900">{m.nombre}</span>
+                          <span className={`cifras text-sm ${tonoCalif(promedioMateria(al, m.id))}`}>{promedioMateria(al, m.id) ?? "—"}</span>
+                        </div>
+                        {[1, 2, 3].map((t) => (
+                          <div key={t} className="flex items-center gap-2 mb-1.5 last:mb-0">
+                            <span className="text-xs text-slate-500 w-6 shrink-0">T{t}</span>
+                            <SelectorCalif compacto valor={califMateria(al, m.id, t)} onChange={(v) => setCalif(al.id, m.id, t, v)} />
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+                <Card>
+                  <div className="grid grid-cols-4 gap-2 text-center">
+                    {[1, 2, 3].map((t) => (
+                      <div key={t} className="bg-slate-100 border border-slate-300 rounded-lg py-2.5">
+                        <p className={`cifras text-xl ${tonoCalif(promedioTrimestreBoleta(al, g, t))}`}>{promedioTrimestreBoleta(al, g, t) ?? "—"}</p>
+                        <p className="text-[11px] text-slate-600">Trim. {t}</p>
+                      </div>
+                    ))}
+                    <div className="bg-sky-50 border border-sky-200 rounded-lg py-2.5">
+                      <p className={`cifras text-xl ${tonoCalif(promedioBoleta(al, g))}`}>{promedioBoleta(al, g) ?? "—"}</p>
+                      <p className="text-[11px] text-slate-600">General</p>
+                    </div>
+                  </div>
+                </Card>
+              </>
+            );
+          })()}
+        </>
+      )}
+
+      <Modal open={!!editMat} onClose={() => setEditMat(null)} title={`Materias de ${g.grado}° ${g.grupo}`} ancho="max-w-lg"
+        footer={<><Btn tipo="secundario" onClick={() => setEditMat(null)}>Cancelar</Btn><Btn icon={Save} onClick={guardarMaterias}>Guardar</Btn></>}>
+        {editMat && <EditorMaterias lista={editMat} set={setEditMat} />}
+      </Modal>
+    </div>
+  );
+}
+
+function EditorMaterias({ lista, set }) {
+  return (
+    <div className="space-y-2">
+      <Aviso>Hasta {MAX_MATERIAS_BOLETA} materias. Cada grupo lleva las suyas, así que configúralas una vez por grupo.</Aviso>
+      {lista.map((m, i) => (
+        <div key={m.id} className="flex gap-2 items-center">
+          <span className="cifras w-6 text-xs text-slate-500 shrink-0">{i + 1}</span>
+          <input value={m.nombre} onChange={(e) => { const c = [...lista]; c[i] = { ...m, nombre: e.target.value }; set(c); }} className={inputCls} />
+          <button onClick={() => set(lista.filter((_, j) => j !== i))} className="p-2 text-rose-600 hover:bg-rose-50 rounded-lg"><Trash2 size={15} /></button>
+        </div>
+      ))}
+      {lista.length < MAX_MATERIAS_BOLETA && (
+        <Btn size="sm" tipo="secundario" icon={Plus} onClick={() => set([...lista, { id: uid("mb"), nombre: "" }])}>Agregar materia</Btn>
+      )}
+      <p className="text-xs text-slate-500">{lista.length} de {MAX_MATERIAS_BOLETA}</p>
     </div>
   );
 }
@@ -3016,6 +3326,11 @@ function Reportes({ db, toast }) {
       });
       return { titulo: "Reporte por materia", cols: ["Materia", "Actividad", "Trim.", "Entrega", "Entregadas", "Fuera de tiempo", "No entregadas", "Promedio"], filas };
     }
+    if (tipo === "boleta") {
+      const mats = materiasBoleta(g);
+      const filas = alumnos.map((a) => [a.numLista, nomComp(a), ...mats.map((m) => promedioMateria(a, m.id) ?? "—"), promedioBoleta(a, g) ?? "—"]);
+      return { titulo: "Boleta del grupo", cols: ["No.", "Nombre", ...mats.map((m) => m.nombre), "Promedio"], filas };
+    }
     if (tipo === "ingreso") {
       const filas = alumnos.map((a) => { const ing = datosIngreso(db, a); const opc = opcionIngreso(db, ing.opcion);
         return [a.numLista, nomComp(a), opc ? `${opc.n} · ${opc.nombre}` : "Sin elegir", ing.folio || "—",
@@ -3081,6 +3396,11 @@ function Reportes({ db, toast }) {
         { label: "En seguimiento", valor: ii.filter((x) => x.estado === "En seguimiento").length },
         { label: "Cerradas", valor: ii.filter((x) => x.estado === "Cerrada").length }];
     }
+    if (tipo === "boleta") {
+      const mats = materiasBoleta(g);
+      const filas = alumnos.map((a) => [a.numLista, nomComp(a), ...mats.map((m) => promedioMateria(a, m.id) ?? "—"), promedioBoleta(a, g) ?? "—"]);
+      return { titulo: "Boleta del grupo", cols: ["No.", "Nombre", ...mats.map((m) => m.nombre), "Promedio"], filas };
+    }
     if (tipo === "ingreso") {
       const ds = alumnos.map((a) => datosIngreso(db, a));
       return [{ label: "Estudiantes", valor: ds.length },
@@ -3119,6 +3439,7 @@ function Reportes({ db, toast }) {
           <Campo label="Tipo de reporte">
             <Sel value={tipo} onChange={(e) => setTipo(e.target.value)}>
               <option value="asistencia">Asistencia</option><option value="evaluacion">Evaluación</option><option value="actividades">Actividades</option>
+              <option value="boleta">Boleta del grupo</option>
               <option value="materia">Por materia</option><option value="permisos">Permisos</option>
               <option value="incidencias">Incidencias</option><option value="convivencia">Convivencia escolar</option><option value="seguimiento">Seguimiento</option>
               <option value="ecoems">ECOEMS</option><option value="comparativoEcoems">Comparativo ECOEMS</option>
