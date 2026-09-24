@@ -44,6 +44,7 @@ const EST_BIT = ["Concluida", "Parcialmente concluida", "Reprogramada", "Suspend
 const EST_ALUMNO = ["Activo", "Baja", "Traslado"];
 const CALIFS = [5, 6, 7, 8, 9, 10];        // escala de la boleta
 const MAX_MATERIAS_BOLETA = 11;
+const MAX_CLASES = 99;            // clases por trimestre; con clase diaria son unas 60
 const MATERIAS_SUGERIDAS = {
   1: ["Español", "Matemáticas", "Biología", "Historia", "Geografía", "Formación Cívica y Ética", "Inglés", "Artes", "Educación Física", "Tecnología", "Tutoría"],
   2: ["Español", "Matemáticas", "Física", "Historia", "Formación Cívica y Ética", "Inglés", "Artes", "Educación Física", "Tecnología", "Tutoría"],
@@ -136,9 +137,11 @@ const configBase = (ciclo) => ({
   alertas: { faltasMax: 3, asistenciaMin: 80, promedioMin: 6, ecoemsMin: 60, actPendientes: 2, diasSeguimiento: 7 },
 });
 
+const ESC_PRINCIPAL = "esc_principal";   // id fijo, para no romper los grupos ya creados
+
 const dbVacia = (ciclo) => ({
   ciclo, config: configBase(ciclo), catalogos: catalogosBase(),
-  grupos: [], alumnos: [], asistencias: [], actividades: [], entregas: [],
+  escuelas: [], grupos: [], alumnos: [], asistencias: [], actividades: [], entregas: [],
   permisos: [], incidencias: [], valoraciones: [], bitacoras: [], ecoems: [], eventos: [],
   folio: 0,
 });
@@ -165,8 +168,13 @@ function normalizarDb(d, ciclo) {
     ingresoOpcion: "", ingresoFolio: "", ingresoPuntaje: "", ingresoEscuela: "", ingresoObs: "", ...a,
     boleta: a.boleta && typeof a.boleta === "object" ? a.boleta : {},
   }));
+  if (!Array.isArray(out.escuelas) || out.escuelas.length === 0) {
+    out.escuelas = [{ id: ESC_PRINCIPAL, nombre: out.config.escuela || "Mi escuela", cct: out.config.cct || "", turno: out.config.turno || "Matutino", director: "" }];
+  }
+  const primera = out.escuelas[0].id;
   out.grupos = out.grupos.map((g) => ({
     ...g,
+    escuelaId: g.escuelaId && out.escuelas.some((e) => e.id === g.escuelaId) ? g.escuelaId : primera,
     materiasBoleta: Array.isArray(g.materiasBoleta)
       ? g.materiasBoleta
       : (MATERIAS_SUGERIDAS[Number(g.grado)] || []).slice(0, MAX_MATERIAS_BOLETA).map((n) => ({ id: uid("mb"), nombre: n })),
@@ -198,7 +206,9 @@ function generarDemo(ciclo) {
   db.config.cct = "00XXX0000X";
   db.config.docente = "Docente de prueba";
   db.config.asignatura = "Matemáticas";
-  const g = { id: uid("grp"), grado: 3, grupo: "D", turno: "Matutino", asignatura: "Matemáticas", docente: "Docente de prueba", activo: true };
+  db.escuelas = [{ id: ESC_PRINCIPAL, nombre: db.config.escuela, cct: db.config.cct, turno: "Matutino", director: "" }];
+  const g = { id: uid("grp"), grado: 3, grupo: "D", turno: "Matutino", asignatura: "Matemáticas", docente: "Docente de prueba", escuelaId: ESC_PRINCIPAL, activo: true,
+    materiasBoleta: MATERIAS_SUGERIDAS[3].map((n) => ({ id: uid("mb"), nombre: n })) };
   db.grupos.push(g);
   db.alumnos = NOMBRES_DEMO.map((n, i) => ({
     id: uid("alu"), numLista: i + 1, apellidos: n[0], nombre: n[1], grupoId: g.id,
@@ -485,7 +495,7 @@ function statsGrupoAsistencia(db, grupoId, trim) {
   const acc = { total: 0, A: 0, F: 0, J: 0, R: 0, P: 0 };
   alumnos.forEach((a) => { const s = statsAsistencia(db, a.id, { grupoId, trim }); ORDEN_EST.forEach((k) => (acc[k] += s[k])); acc.total += s.total; });
   acc.porcentaje = pct(acc.A + acc.J + acc.P + acc.R * 0.5, acc.total);
-  acc.sesiones = db.asistencias.filter((s) => s.grupoId === grupoId && (!trim || trimestreDe(s.fecha, db.config) === trim)).length;
+  acc.sesiones = db.asistencias.filter((s) => s.grupoId === grupoId && !s.sinClase && (!trim || trimestreDe(s.fecha, db.config) === trim)).length;
   return acc;
 }
 
@@ -548,6 +558,52 @@ function historialEcoems(db, alumnoId) {
   const ini = items[0]?.porcentaje || 0;
   const act = items[items.length - 1]?.porcentaje || 0;
   return { items, inicial: ini, actual: act, diferencia: round(act - ini, 1), avance: ini > 0 ? round(((act - ini) / ini) * 100, 1) : 0 };
+}
+
+/* Una escuela por grupo: hay maestros que trabajan en dos o tres.
+   Si el grupo no tiene escuela asignada, se usa la primera. */
+function escuelaDeGrupo(db, grupoId) {
+  const g = db.grupos.find((x) => x.id === grupoId);
+  const escs = db.escuelas || [];
+  return escs.find((e) => e.id === g?.escuelaId) || escs[0] || null;
+}
+/* Lo que se imprime en el membrete de un PDF de ese grupo. */
+function membrete(db, grupoId) {
+  const e = escuelaDeGrupo(db, grupoId);
+  return e ? { ...db.config, escuela: e.nombre, cct: e.cct, turno: e.turno || db.config.turno } : db.config;
+}
+const etiquetaGrupo = (db, g) => {
+  if (!g) return "—";
+  const e = escuelaDeGrupo(db, g.id);
+  const varias = (db.escuelas || []).length > 1;
+  return `${g.grado}° ${g.grupo}${varias && e ? ` · ${e.cct || e.nombre}` : ""}`;
+};
+
+/* Días hábiles del trimestre en los que no se pasó lista.
+   Los días marcados como "sin clase" dejan de aparecer. */
+function clasesSinRegistrar(db, grupoId, trim) {
+  const t = (db.config.trimestres || []).find((x) => Number(x.n) === Number(trim));
+  if (!t?.inicio) return [];
+  const desde = new Date(t.inicio + "T12:00:00");
+  const hoyD = new Date(hoy() + "T12:00:00");
+  const finT = t.fin ? new Date(t.fin + "T12:00:00") : hoyD;
+  const hasta = finT < hoyD ? finT : hoyD;
+  const registradas = new Set(db.asistencias.filter((x) => x.grupoId === grupoId).map((x) => x.fecha));
+  const faltantes = [];
+  const d = new Date(desde);
+  while (d <= hasta && faltantes.length < 90) {
+    const dia = d.getDay();
+    const iso = d.toISOString().slice(0, 10);
+    if (dia !== 0 && dia !== 6 && !registradas.has(iso)) faltantes.push(iso);
+    d.setDate(d.getDate() + 1);
+  }
+  return faltantes.reverse();   // el más reciente primero
+}
+
+/* Clases efectivamente impartidas: no cuenta los días sin clase. */
+function clasesImpartidas(db, grupoId, trim) {
+  return db.asistencias.filter((x) =>
+    x.grupoId === grupoId && !x.sinClase && (!trim || trimestreDe(x.fecha, db.config) === Number(trim))).length;
 }
 
 /* Boleta del grupo: calificaciones que captura el tutor, no las que
@@ -789,12 +845,15 @@ function Inicio({ db, ir }) {
 function Grupos({ db, upd, ir, toast }) {
   const [modal, setModal] = useState(null);
   const [conf, setConf] = useState(null);
-  const vacio = { grado: 1, grupo: "A", turno: db.config.turno || "Matutino", asignatura: db.config.asignatura || "", docente: db.config.docente || "", activo: true };
+  const [fEscuela, setFEscuela] = useState("");
+  const escuelas = db.escuelas || [];
+  const variasEscuelas = escuelas.length > 1;
+  const vacio = { grado: 1, grupo: "A", turno: db.config.turno || "Matutino", asignatura: db.config.asignatura || "", docente: db.config.docente || "", escuelaId: escuelas[0]?.id || "", activo: true };
 
   const guardar = () => {
     if (!modal.grupo) return toast("Escribe la letra del grupo", "error");
-    const dup = db.grupos.find((g) => g.id !== modal.id && g.grado === Number(modal.grado) && g.grupo === modal.grupo && g.turno === modal.turno);
-    if (dup) return toast("Ese grupo ya existe en este ciclo", "error");
+    const dup = db.grupos.find((g) => g.id !== modal.id && g.grado === Number(modal.grado) && g.grupo === modal.grupo && g.turno === modal.turno && (g.escuelaId || "") === (modal.escuelaId || ""));
+    if (dup) return toast("Ese grupo ya existe en esa escuela", "error");
     upd((d) => {
       if (modal.id) { const i = d.grupos.findIndex((g) => g.id === modal.id); d.grupos[i] = { ...modal, grado: Number(modal.grado) }; }
       else {
@@ -821,11 +880,18 @@ function Grupos({ db, upd, ir, toast }) {
   return (
     <div className="space-y-4">
       <Titulo sub="Cada grupo agrupa alumnas, alumnos, asistencia, actividades y seguimiento." right={<Btn icon={Plus} onClick={() => setModal(vacio)}>Nuevo grupo</Btn>}>Grupos</Titulo>
+      {variasEscuelas && (
+        <Sel value={fEscuela} onChange={(e) => setFEscuela(e.target.value)} className="max-w-[280px]">
+          <option value="">Todas las escuelas</option>
+          {escuelas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}
+        </Sel>
+      )}
+
       {db.grupos.length === 0 ? (
         <Card><Vacio texto="Todavía no hay grupos. Empieza creando uno." accion={<Btn icon={Plus} onClick={() => setModal(vacio)}>Crear el primer grupo</Btn>} /></Card>
       ) : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {db.grupos.map((g) => {
+          {db.grupos.filter((g) => !fEscuela || g.escuelaId === fEscuela).map((g) => {
             const n = db.alumnos.filter((a) => a.grupoId === g.id && a.activo).length;
             const s = statsGrupoAsistencia(db, g.id);
             return (
@@ -834,6 +900,7 @@ function Grupos({ db, upd, ir, toast }) {
                   <div>
                     <p className="text-2xl font-semibold text-slate-900">{g.grado}° {g.grupo}</p>
                     <p className="text-xs text-slate-500">{g.turno} · {g.asignatura || "Sin asignatura"}</p>
+                    {variasEscuelas && <p className="text-[11px] text-slate-600 font-medium mt-0.5">{escuelaDeGrupo(db, g.id)?.nombre || "Sin escuela"}</p>}
                   </div>
                   <div className="flex gap-1">
                     <button onClick={() => setModal(g)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500"><Pencil size={15} /></button>
@@ -866,6 +933,10 @@ function Grupos({ db, upd, ir, toast }) {
             <Campo label="Asignatura"><Inp value={modal.asignatura} onChange={(e) => setModal({ ...modal, asignatura: e.target.value })} /></Campo>
             <Campo label="Docente"><Inp value={modal.docente} onChange={(e) => setModal({ ...modal, docente: e.target.value })} /></Campo>
             <Campo label="Estado"><Sel value={modal.activo ? "1" : "0"} onChange={(e) => setModal({ ...modal, activo: e.target.value === "1" })}><option value="1">Activo</option><option value="0">Inactivo</option></Sel></Campo>
+            <div className="col-span-2"><Campo label="Escuela" hint="Los reportes de este grupo salen con el membrete de esta escuela.">
+              <Sel value={modal.escuelaId || ""} onChange={(e) => setModal({ ...modal, escuelaId: e.target.value })}>
+                {escuelas.map((e) => <option key={e.id} value={e.id}>{e.nombre}{e.cct ? ` · ${e.cct}` : ""}</option>)}
+              </Sel></Campo></div>
           </div>
         )}
       </Modal>
@@ -957,7 +1028,7 @@ function Alumnos({ db, upd, ir, toast, params }) {
       columnas: ["No.", "Nombre", "CURP", "Grupo", "Estatus", "Asistencia", "Promedio"],
       filas: lista.map((a) => { const g2 = db.grupos.find((x) => x.id === a.grupoId); const st = statsAsistencia(db, a.id);
         return [a.numLista, nomComp(a), a.curp || "—", g2 ? `${g2.grado}° ${g2.grupo}` : "—", a.estatus || (a.activo ? "Activo" : "Baja"), st.total ? st.porcentaje + "%" : "—", promedioAcumulado(db, a.id) || "—"]; }),
-      config: db.config, ciclo: db.ciclo,
+      config: membrete(db, grupoId), ciclo: db.ciclo,
       resumen: [{ label: "Estudiantes", valor: lista.length }, { label: "Activos", valor: lista.filter((a) => (a.estatus || (a.activo ? "Activo" : "Baja")) === "Activo").length }],
       nota: "Documento con datos de menores de edad. Su manejo es confidencial y de uso exclusivamente escolar.",
     });
@@ -978,7 +1049,7 @@ function Alumnos({ db, upd, ir, toast, params }) {
       <div className="flex gap-2 flex-wrap">
         <Sel value={grupoId} onChange={(e) => setGrupoId(e.target.value)} className="max-w-[190px]">
           <option value="">Todos los grupos</option>
-          {db.grupos.map((g) => <option key={g.id} value={g.id}>{g.grado}° {g.grupo}</option>)}
+          {db.grupos.map((g) => <option key={g.id} value={g.id}>{etiquetaGrupo(db, g)}</option>)}
         </Sel>
         <Sel value={fEstatus} onChange={(e) => setFEstatus(e.target.value)} className="max-w-[150px]">
           <option value="">Todos los estatus</option>{EST_ALUMNO.map((s2) => <option key={s2}>{s2}</option>)}
@@ -1024,7 +1095,7 @@ function Alumnos({ db, upd, ir, toast, params }) {
           <div className="space-y-3">
             <div className="grid grid-cols-3 gap-3">
               <Campo label="No. de lista"><Inp type="number" value={modal.numLista} onChange={(e) => setModal({ ...modal, numLista: e.target.value })} /></Campo>
-              <Campo label="Grupo"><Sel value={modal.grupoId} onChange={(e) => setModal({ ...modal, grupoId: e.target.value })}>{db.grupos.map((g) => <option key={g.id} value={g.id}>{g.grado}° {g.grupo}</option>)}</Sel></Campo>
+              <Campo label="Grupo"><Sel value={modal.grupoId} onChange={(e) => setModal({ ...modal, grupoId: e.target.value })}>{db.grupos.map((g) => <option key={g.id} value={g.id}>{etiquetaGrupo(db, g)}</option>)}</Sel></Campo>
               <Campo label="Estatus"><Sel value={modal.estatus || "Activo"} onChange={(e) => setModal({ ...modal, estatus: e.target.value })}>{EST_ALUMNO.map((s2) => <option key={s2}>{s2}</option>)}</Sel></Campo>
             </div>
             <Campo label="Apellidos" req><Inp value={modal.apellidos} onChange={(e) => setModal({ ...modal, apellidos: e.target.value })} /></Campo>
@@ -1095,7 +1166,7 @@ function Ficha({ db, ir, params, toast }) {
 
   const descargarFicha = () => {
     pdfAlumno({
-      config: db.config, ciclo: db.ciclo,
+      config: membrete(db, a.grupoId), ciclo: db.ciclo,
       grupo: g ? `${g.grado}° ${g.grupo}` : "Sin grupo",
       alumno: {
         nombre: nomComp(a),
@@ -1121,8 +1192,8 @@ function Ficha({ db, ir, params, toast }) {
           ],
         }] : []),
         { titulo: "Asistencia",
-          columnas: ["Clases", "Asistencias", "Faltas", "Justificadas", "Retardos", "Permisos", "Porcentaje"],
-          filas: [[asis.total, asis.A, asis.F, asis.J, asis.R, asis.P, asis.porcentaje + "%"]] },
+          columnas: ["Clases dadas", "Faltas", "Asistencias", "Justificadas", "Retardos", "Permisos", "Porcentaje"],
+          filas: [[clasesImpartidas(db, a.grupoId), `${asis.F} de ${clasesImpartidas(db, a.grupoId)}`, asis.A, asis.J, asis.R, asis.P, asis.porcentaje + "%"]] },
         { titulo: "Evaluación",
           columnas: ["Trimestre 1", "Trimestre 2", "Trimestre 3", "Promedio acumulado"],
           filas: [[trims[0].final || "—", trims[1].final || "—", trims[2].final || "—", acum || "—"]] },
@@ -1166,6 +1237,7 @@ function Ficha({ db, ir, params, toast }) {
               <Pill cls={(a.estatus || (a.activo ? "Activo" : "Baja")) === "Activo" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-100 text-slate-600 border-slate-200"}>{a.estatus || (a.activo ? "Activo" : "Baja")}</Pill>
               {a.curp && <Pill cls="bg-slate-100 text-slate-600 border-slate-200">CURP {a.curp}</Pill>}
               {a.tutorGrupo && <Pill cls="bg-slate-100 text-slate-600 border-slate-200">Tutor(a) de grupo: {a.tutorGrupo}</Pill>}
+              {(db.escuelas || []).length > 1 && <Pill cls="bg-slate-100 text-slate-600 border-slate-200">{escuelaDeGrupo(db, a.grupoId)?.nombre}</Pill>}
             </div>
             {(a.tutorNombre || a.tutorTelefono || a.tutorCorreo) && (
               <p className="text-xs text-slate-500 mt-2">Contacto: {[a.tutorNombre, a.tutorTelefono, a.tutorCorreo].filter(Boolean).join(" · ")}</p>
@@ -1225,13 +1297,20 @@ function Ficha({ db, ir, params, toast }) {
       {tab === "asistencia" && (
         <Card>
           <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-4">
-            <Stat label="Clases" valor={asis.total} />
-            {ORDEN_EST.map((k) => <Stat key={k} label={EST[k].label} valor={asis[k]} />)}
+            <Stat label="Faltas" valor={`${asis.F} de ${clasesImpartidas(db, a.grupoId)}`} color={asis.F ? "text-rose-700" : "text-slate-900"} />
+            <Stat label="Clases dadas" valor={clasesImpartidas(db, a.grupoId)} />
+            <Stat label="Asistencias" valor={asis.A} />
+            <Stat label="Justificadas" valor={asis.J} />
+            <Stat label="Retardos" valor={asis.R} />
+            <Stat label="Permisos" valor={asis.P} />
           </div>
-          <Tabla cols={["Fecha", "Sesión", "Estado"]}>
+          <p className="text-xs text-slate-500 mb-2">Toca cualquier renglón para corregir esa clase.</p>
+          <Tabla cols={["Fecha", "Clase", "Estado", ""]}>
             {db.asistencias.filter((s) => s.marcas?.[a.id]).sort((x, y) => y.fecha.localeCompare(x.fecha)).slice(0, 60).map((s) => (
-              <tr key={s.id}><td className="py-2 px-3">{fFecha(s.fecha)}</td><td className="py-2 px-3 text-slate-500">{s.sesion}</td>
-                <td className="py-2 px-3"><Pill cls={EST[s.marcas[a.id]].soft}>{EST[s.marcas[a.id]].label}</Pill></td></tr>
+              <tr key={s.id} className="hover:bg-slate-50 cursor-pointer" onClick={() => ir("asistencia", { grupoId: a.grupoId, fecha: s.fecha })}>
+                <td className="py-2 px-3">{fFecha(s.fecha)}</td><td className="py-2 px-3 text-slate-500">{s.sesion}</td>
+                <td className="py-2 px-3"><Pill cls={EST[s.marcas[a.id]].soft}>{EST[s.marcas[a.id]].label}</Pill></td>
+                <td className="py-2 px-3 text-right text-slate-400"><ChevronRight size={14} className="inline" /></td></tr>
             ))}
           </Tabla>
         </Card>
@@ -1354,17 +1433,48 @@ function Ficha({ db, ir, params, toast }) {
 /* ============================================================
    MÓDULO: ASISTENCIA
    ============================================================ */
-function Asistencia({ db, upd, toast }) {
-  const [grupoId, setGrupoId] = useState(db.grupos[0]?.id || "");
-  const [fecha, setFecha] = useState(hoy());
+function Asistencia({ db, upd, toast, params }) {
+  const [grupoId, setGrupoId] = useState(params?.grupoId || db.grupos[0]?.id || "");
+  const [fecha, setFecha] = useState(params?.fecha || hoy());
   const [sesion, setSesion] = useState(1);
   const alumnos = useMemo(() => sortAl(db.alumnos.filter((a) => a.grupoId === grupoId && a.activo)), [db, grupoId]);
+  const trimActual = trimestreDe(fecha, db.config);
+  const sesionesTrim = useMemo(() =>
+    db.asistencias.filter((x) => x.grupoId === grupoId && !x.sinClase && trimestreDe(x.fecha, db.config) === trimActual),
+    [db, grupoId, trimActual]);
+  const clasesDelTrimestre = sesionesTrim.length;
   const registro = db.asistencias.find((s) => s.grupoId === grupoId && s.fecha === fecha && Number(s.sesion) === Number(sesion));
   const [marcas, setMarcas] = useState({});
   const [notas, setNotas] = useState({});
   const [obsSesion, setObsSesion] = useState("");
   const [sucio, setSucio] = useState(false);
   const [abierto, setAbierto] = useState(null);
+  const [verPendientes, setVerPendientes] = useState(false);
+  const [verUltimas, setVerUltimas] = useState(false);
+  const [confBorrar, setConfBorrar] = useState(false);
+  const pendientes = useMemo(() => clasesSinRegistrar(db, grupoId, trimActual), [db, grupoId, trimActual]);
+
+  const ultimas = useMemo(() =>
+    db.asistencias.filter((x) => x.grupoId === grupoId && !x.sinClase)
+      .sort((a, b) => b.fecha.localeCompare(a.fecha) || b.sesion - a.sesion).slice(0, 8),
+    [db, grupoId]);
+
+  const borrarRegistro = () => {
+    if (!registro) return;
+    const g2 = db.grupos.find((x) => x.id === grupoId);
+    eliminarConRespaldo({ tipo: "Pase de lista", descripcion: `${g2 ? `${g2.grado}° ${g2.grupo}` : ""} · ${fFecha(fecha)} · clase ${sesion}`, ciclo: db.ciclo, datos: { asistencias: [registro] } });
+    upd((d) => { d.asistencias = d.asistencias.filter((x) => x.id !== registro.id); });
+    setConfBorrar(false);
+    toast("Pase de lista enviado a la papelera");
+  };
+
+  const marcarSinClase = (f) => {
+    upd((d) => {
+      if (d.asistencias.some((x) => x.grupoId === grupoId && x.fecha === f)) return;
+      d.asistencias.push({ id: uid("asi"), grupoId, fecha: f, sesion: 0, sinClase: true, marcas: {}, notas: {}, observaciones: "Sin clase" });
+    });
+    toast("Marcado como día sin clase");
+  };
 
   useEffect(() => {
     setMarcas(registro?.marcas ? { ...registro.marcas } : {});
@@ -1372,6 +1482,13 @@ function Asistencia({ db, upd, toast }) {
     setObsSesion(registro?.observaciones || "");
     setSucio(false);
   }, [grupoId, fecha, sesion, registro?.id]);
+
+  /* Si ya pasaste lista ese día, abre esa clase; si no, propone la que sigue. */
+  useEffect(() => {
+    const delDia = db.asistencias.filter((x) => x.grupoId === grupoId && x.fecha === fecha);
+    if (delDia.length) setSesion(Math.min(...delDia.map((x) => Number(x.sesion) || 1)));
+    else setSesion(Math.min(MAX_CLASES, sesionesTrim.length + 1));
+  }, [grupoId, fecha]);
 
   const marcar = (id, val) => { setMarcas((m) => ({ ...m, [id]: val })); setSucio(true); };
   const todos = (val) => { const m = {}; alumnos.forEach((a) => (m[a.id] = val)); setMarcas(m); setSucio(true); };
@@ -1383,7 +1500,7 @@ function Asistencia({ db, upd, toast }) {
       if (i >= 0) { d.asistencias[i].marcas = marcas; d.asistencias[i].notas = notas; d.asistencias[i].observaciones = obsSesion; }
       else d.asistencias.push({ id: uid("asi"), grupoId, fecha, sesion: Number(sesion), marcas, notas, observaciones: obsSesion });
     });
-    setSucio(false); toast("Asistencia guardada");
+    setSucio(false); toast(registro ? "Corrección guardada" : "Asistencia guardada");
   };
 
   const conteo = ORDEN_EST.reduce((o, k) => ({ ...o, [k]: Object.values(marcas).filter((v) => v === k).length }), {});
@@ -1394,12 +1511,49 @@ function Asistencia({ db, upd, toast }) {
       <Titulo sub="Selecciona grupo y fecha, marca a todo el grupo y ajusta solo los casos particulares.">Asistencia</Titulo>
       <Card>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <Campo label="Grupo"><Sel value={grupoId} onChange={(e) => setGrupoId(e.target.value)}>{db.grupos.map((g) => <option key={g.id} value={g.id}>{g.grado}° {g.grupo}</option>)}</Sel></Campo>
+          <Campo label="Grupo"><Sel value={grupoId} onChange={(e) => setGrupoId(e.target.value)}>{db.grupos.map((g) => <option key={g.id} value={g.id}>{etiquetaGrupo(db, g)}</option>)}</Sel></Campo>
           <Campo label="Fecha"><Inp type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} /></Campo>
-          <Campo label="Clase / sesión"><Sel value={sesion} onChange={(e) => setSesion(Number(e.target.value))}>{[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => <option key={n} value={n}>Clase {n}</option>)}</Sel></Campo>
-          <Campo label="Trimestre"><div className="px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-600">T{trimestreDe(fecha, db.config)}</div></Campo>
+          <Campo label="Número de clase" hint="Se propone solo. Ajústalo si hace falta.">
+            <div className="flex items-stretch gap-1.5">
+              <button type="button" onClick={() => setSesion((n) => Math.max(1, Number(n) - 1))} aria-label="Clase anterior"
+                className="w-10 shrink-0 rounded-lg border-2 border-slate-300 bg-white text-slate-800 text-lg font-bold hover:border-slate-500">−</button>
+              <input type="number" min="1" max={MAX_CLASES} value={sesion}
+                onChange={(e) => setSesion(Math.min(MAX_CLASES, Math.max(1, Number(e.target.value) || 1)))}
+                className={inputCls + " text-center font-semibold"} />
+              <button type="button" onClick={() => setSesion((n) => Math.min(MAX_CLASES, Number(n) + 1))} aria-label="Clase siguiente"
+                className="w-10 shrink-0 rounded-lg border-2 border-slate-300 bg-white text-slate-800 text-lg font-bold hover:border-slate-500">+</button>
+            </div>
+          </Campo>
+          <Campo label="Trimestre"><div className="px-3 py-2 text-sm bg-slate-100 border border-slate-300 rounded-lg text-slate-800 font-medium">T{trimestreDe(fecha, db.config)}</div></Campo>
         </div>
-        {registro && <p className="text-xs text-emerald-700 mt-2">Ya existe un registro para esta fecha y clase. Al guardar se actualiza.</p>}
+        <div className="flex items-center justify-between gap-3 flex-wrap mt-2">
+          <p className="text-xs text-slate-600">
+            {clasesDelTrimestre} {clasesDelTrimestre === 1 ? "clase registrada" : "clases registradas"} en el trimestre {trimestreDe(fecha, db.config)}
+          </p>
+          {registro
+            ? <span className="text-xs font-medium text-sky-900 bg-sky-50 border border-sky-200 rounded-md px-2 py-0.5">Estás corrigiendo una clase ya guardada</span>
+            : <span className="text-xs text-slate-500">Clase nueva</span>}
+        </div>
+
+        <div className="flex gap-2 mt-3 flex-wrap">
+          {ultimas.length > 0 && (
+            <Btn size="sm" tipo="secundario" icon={RotateCcw} onClick={() => setVerUltimas(true)}>Corregir una clase anterior</Btn>
+          )}
+          {registro && (
+            <Btn size="sm" tipo="secundario" icon={Trash2} onClick={() => setConfBorrar(true)}>Borrar este pase de lista</Btn>
+          )}
+        </div>
+
+        {pendientes.length > 0 && (
+          <button type="button" onClick={() => setVerPendientes(true)}
+            className="w-full mt-3 flex items-center gap-2 text-left bg-amber-50 border-2 border-amber-300 rounded-lg px-3 py-2.5 hover:border-amber-500">
+            <AlertTriangle size={17} className="text-amber-700 shrink-0" />
+            <span className="grow text-sm text-amber-900">
+              <strong>{pendientes.length}</strong> {pendientes.length === 1 ? "día hábil sin pase de lista" : "días hábiles sin pase de lista"} en este trimestre
+            </span>
+            <ChevronRight size={16} className="text-amber-700 shrink-0" />
+          </button>
+        )}
       </Card>
 
       {alumnos.length === 0 ? <Card><Vacio texto="Este grupo no tiene estudiantes activos." /></Card> : (
@@ -1446,6 +1600,54 @@ function Asistencia({ db, upd, toast }) {
             <Campo label="Observaciones de la sesión"><Inp value={obsSesion} onChange={(e) => { setObsSesion(e.target.value); setSucio(true); }} placeholder="Suspensión parcial, actividad especial, guardia…" /></Campo>
           </Card>
 
+          <Modal open={verUltimas} onClose={() => setVerUltimas(false)} title="Corregir una clase anterior" ancho="max-w-lg"
+            footer={<Btn onClick={() => setVerUltimas(false)}>Cerrar</Btn>}>
+            <div className="space-y-3">
+              <Aviso>Toca la clase que quieres corregir. Se abre con lo que habías guardado; cambias lo que haga falta y vuelves a guardar. No se duplica nada.</Aviso>
+              <div className="space-y-1.5 max-h-80 overflow-y-auto">
+                {ultimas.map((r) => {
+                  const m = Object.values(r.marcas || {});
+                  return (
+                    <button key={r.id} type="button" onClick={() => { setFecha(r.fecha); setSesion(Number(r.sesion) || 1); setVerUltimas(false); }}
+                      className="w-full flex items-center gap-3 text-left border border-slate-300 rounded-lg px-3 py-2 hover:border-slate-500 flex-wrap">
+                      <span className="grow">
+                        <span className="block text-sm text-slate-900">{new Date(r.fecha + "T12:00:00").toLocaleDateString("es-MX", { weekday: "short", day: "numeric", month: "long" })}</span>
+                        <span className="block text-[11px] text-slate-500">Clase {r.sesion}</span>
+                      </span>
+                      <span className="flex gap-1">
+                        {ORDEN_EST.filter((k) => m.filter((v) => v === k).length).map((k) => (
+                          <span key={k} className={`cifras text-[11px] font-semibold rounded px-1.5 py-0.5 ${EST[k].full}`}>{m.filter((v) => v === k).length}{EST[k].corto}</span>
+                        ))}
+                      </span>
+                      <ChevronRight size={15} className="text-slate-400 shrink-0" />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </Modal>
+
+          <Confirmar open={confBorrar} texto={`¿Borrar el pase de lista del ${fFecha(fecha)}, clase ${sesion}? Se guarda en la papelera por si lo necesitas de vuelta.`}
+            textoSi="Borrar" onSi={borrarRegistro} onNo={() => setConfBorrar(false)} />
+
+          <Modal open={verPendientes} onClose={() => setVerPendientes(false)} title="Clases sin registrar" ancho="max-w-lg"
+            footer={<Btn onClick={() => setVerPendientes(false)}>Cerrar</Btn>}>
+            <div className="space-y-3">
+              <Aviso>Son los días de lunes a viernes del trimestre en los que este grupo no tiene pase de lista. Aquí aparecen también los días festivos y de consejo técnico: márcalos como «sin clase» y dejan de salir.</Aviso>
+              <div className="space-y-1.5 max-h-80 overflow-y-auto">
+                {pendientes.map((f) => (
+                  <div key={f} className="flex items-center gap-2 border border-slate-300 rounded-lg px-3 py-2 flex-wrap">
+                    <span className="grow text-sm text-slate-900">
+                      {new Date(f + "T12:00:00").toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long" })}
+                    </span>
+                    <Btn size="sm" onClick={() => { setFecha(f); setVerPendientes(false); }}>Pasar lista</Btn>
+                    <Btn size="sm" tipo="secundario" onClick={() => marcarSinClase(f)}>Sin clase</Btn>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </Modal>
+
           <div className="sticky bottom-16 lg:bottom-4 z-20">
             <Card className="flex items-center justify-between gap-3 flex-wrap shadow-lg">
               <div className="flex gap-1.5 flex-wrap">
@@ -1456,7 +1658,7 @@ function Asistencia({ db, upd, toast }) {
                 ))}
                 {ORDEN_EST.every((k) => conteo[k] === 0) && <span className="text-xs text-slate-500">Sin marcar</span>}
               </div>
-              <Btn icon={Save} onClick={guardar} disabled={!sucio && !!registro}>Guardar asistencia</Btn>
+              <Btn icon={Save} onClick={guardar} disabled={!sucio && !!registro}>{registro ? "Guardar corrección" : "Guardar asistencia"}</Btn>
             </Card>
           </div>
         </>
@@ -1498,7 +1700,7 @@ function Permisos({ db, upd, toast }) {
     const g = db.grupos.find((x) => x.id === p.grupoId);
     const fila = (a) => { const r = p.registros?.[a.id] || {}; return [a.numLista, nomComp(a), r.entregado ? "Sí" : "No", r.autorizado ? "Sí" : "No", r.obs || ""]; };
     pdfPermisos({
-      permiso: p, config: db.config, ciclo: db.ciclo,
+      permiso: p, config: membrete(db, p.grupoId), ciclo: db.ciclo,
       grupo: g ? `${g.grado}° ${g.grupo}` : "Sin grupo",
       autorizados: als.filter((a) => p.registros?.[a.id]?.autorizado).map(fila),
       pendientes: als.filter((a) => !p.registros?.[a.id]?.entregado).map(fila),
@@ -1552,7 +1754,7 @@ function Permisos({ db, upd, toast }) {
             <Campo label="Fecha"><Inp type="date" value={modal.fecha} onChange={(e) => setModal({ ...modal, fecha: e.target.value })} /></Campo>
             <Campo label="Lugar"><Inp value={modal.lugar} onChange={(e) => setModal({ ...modal, lugar: e.target.value })} /></Campo>
             <Campo label="Responsable"><Inp value={modal.responsable} onChange={(e) => setModal({ ...modal, responsable: e.target.value })} /></Campo>
-            <Campo label="Grupo"><Sel value={modal.grupoId} onChange={(e) => setModal({ ...modal, grupoId: e.target.value })}>{db.grupos.map((g) => <option key={g.id} value={g.id}>{g.grado}° {g.grupo}</option>)}</Sel></Campo>
+            <Campo label="Grupo"><Sel value={modal.grupoId} onChange={(e) => setModal({ ...modal, grupoId: e.target.value })}>{db.grupos.map((g) => <option key={g.id} value={g.id}>{etiquetaGrupo(db, g)}</option>)}</Sel></Campo>
             <div className="grid grid-cols-2 gap-3">
               <Campo label="Hora de salida"><Inp type="time" value={modal.horaSalida} onChange={(e) => setModal({ ...modal, horaSalida: e.target.value })} /></Campo>
               <Campo label="Hora de regreso"><Inp type="time" value={modal.horaRegreso} onChange={(e) => setModal({ ...modal, horaRegreso: e.target.value })} /></Campo>
@@ -1627,7 +1829,7 @@ function Actividades({ db, upd, toast }) {
       <Titulo sub="Planeación, seguimiento de entregas y calificación en un mismo lugar."
         right={<Btn icon={Plus} onClick={() => setModal({ ...vacio, grupoId, trimestre: trim })} disabled={!db.grupos.length}>Nueva actividad</Btn>}>Actividades</Titulo>
       <div className="flex gap-2 flex-wrap">
-        <Sel value={grupoId} onChange={(e) => setGrupoId(e.target.value)} className="max-w-[170px]">{db.grupos.map((g) => <option key={g.id} value={g.id}>{g.grado}° {g.grupo}</option>)}</Sel>
+        <Sel value={grupoId} onChange={(e) => setGrupoId(e.target.value)} className="max-w-[170px]">{db.grupos.map((g) => <option key={g.id} value={g.id}>{etiquetaGrupo(db, g)}</option>)}</Sel>
         <Sel value={trim} onChange={(e) => setTrim(Number(e.target.value))} className="max-w-[150px]">{[1, 2, 3].map((t) => <option key={t} value={t}>Trimestre {t}</option>)}</Sel>
       </div>
 
@@ -1679,7 +1881,7 @@ function Actividades({ db, upd, toast }) {
         {modal && (
           <div className="grid sm:grid-cols-2 gap-3">
             <div className="sm:col-span-2"><Campo label="Nombre" req><Inp value={modal.nombre} onChange={(e) => setModal({ ...modal, nombre: e.target.value })} /></Campo></div>
-            <Campo label="Grupo"><Sel value={modal.grupoId} onChange={(e) => setModal({ ...modal, grupoId: e.target.value })}>{db.grupos.map((g) => <option key={g.id} value={g.id}>{g.grado}° {g.grupo}</option>)}</Sel></Campo>
+            <Campo label="Grupo"><Sel value={modal.grupoId} onChange={(e) => setModal({ ...modal, grupoId: e.target.value })}>{db.grupos.map((g) => <option key={g.id} value={g.id}>{etiquetaGrupo(db, g)}</option>)}</Sel></Campo>
             <Campo label="Instrumento de evaluación"><Sel value={modal.instrumentoId} onChange={(e) => setModal({ ...modal, instrumentoId: e.target.value })}>{(db.catalogos.instrumentos || []).map((i) => <option key={i.id} value={i.id}>{i.nombre} ({i.porcentaje}%)</option>)}</Sel></Campo>
             <Campo label="Fecha"><Inp type="date" value={modal.fecha} onChange={(e) => setModal({ ...modal, fecha: e.target.value })} /></Campo>
             <Campo label="Fecha de entrega"><Inp type="date" value={modal.fechaEntrega} onChange={(e) => setModal({ ...modal, fechaEntrega: e.target.value })} /></Campo>
@@ -1758,7 +1960,7 @@ function Evaluacion({ db, upd, ir, toast }) {
       subtitulo: [g2 ? `${g2.grado}° ${g2.grupo}` : "", db.config.docente, db.config.asignatura].filter(Boolean).join("   ·   "),
       columnas: ["No.", "Nombre", ...db.catalogos.instrumentos.map((i) => `${i.nombre} ${i.porcentaje}%`), `T${trim}`, "Acumulado"],
       filas: filas.map((f) => [f.a.numLista, nomComp(f.a), ...f.detalle.map((d) => d.promedio ?? "—"), f.final || "—", f.acum || "—"]),
-      config: db.config, ciclo: db.ciclo,
+      config: membrete(db, grupoId), ciclo: db.ciclo,
       resumen: [{ label: "Promedio del grupo", valor: promGrupo || "—" }, { label: "Evaluados", valor: `${evaluados.length}/${filas.length}` }],
       nota: "Calificaciones calculadas con los porcentajes configurados en el sistema.",
     });
@@ -1774,7 +1976,7 @@ function Evaluacion({ db, upd, ir, toast }) {
       <Tabs activa={vista} set={setVista} tabs={[{ id: "miMateria", label: "Mi materia" }, { id: "boleta", label: "Boleta del grupo" }]} />
 
       <div className="flex gap-2 flex-wrap">
-        <Sel value={grupoId} onChange={(e) => setGrupoId(e.target.value)} className="max-w-[170px]">{db.grupos.map((x) => <option key={x.id} value={x.id}>{x.grado}° {x.grupo}</option>)}</Sel>
+        <Sel value={grupoId} onChange={(e) => setGrupoId(e.target.value)} className="max-w-[170px]">{db.grupos.map((x) => <option key={x.id} value={x.id}>{etiquetaGrupo(db, x)}</option>)}</Sel>
         {vista === "miMateria" && <Sel value={trim} onChange={(e) => setTrim(Number(e.target.value))} className="max-w-[150px]">{[1, 2, 3].map((t) => <option key={t} value={t}>Trimestre {t}</option>)}</Sel>}
         {vista === "miMateria" && <div className="flex gap-2 grow justify-end">
           <Btn size="sm" tipo="secundario" icon={FileDown} onClick={pdfEvaluacion}>PDF</Btn>
@@ -1881,7 +2083,7 @@ function Boleta({ db, upd, ir, toast, grupoId }) {
       subtitulo: [g ? `${g.grado}° ${g.grupo}` : "", `Tutor(a): ${db.config.docente || "—"}`].filter(Boolean).join("   ·   "),
       columnas: ["No.", "Nombre", ...materias.map((m) => m.nombre), "Promedio"],
       filas: alumnos.map((a) => [a.numLista, nomComp(a), ...materias.map((m) => promedioMateria(a, m.id) ?? "—"), promedioBoleta(a, g) ?? "—"]),
-      config: db.config, ciclo: db.ciclo,
+      config: membrete(db, grupoId), ciclo: db.ciclo,
       resumen: [{ label: "Estudiantes", valor: alumnos.length },
         { label: "Materias", valor: materias.length },
         { label: "Promedio del grupo", valor: promGeneral ?? "—" }],
@@ -2157,7 +2359,7 @@ function Ecoems({ db, upd, ir, toast }) {
         f.diferencia === null ? "—" : (f.diferencia > 0 ? "+" : "") + f.diferencia,
         f.escuela || "—",
       ]),
-      config: db.config, ciclo: db.ciclo,
+      config: membrete(db, grupoId), ciclo: db.ciclo,
       resumen: [
         { label: "Estudiantes", valor: ingreso.filas.length },
         { label: "Con folio", valor: ingreso.conFolio },
@@ -2190,7 +2392,7 @@ function Ecoems({ db, upd, ir, toast }) {
         return [a.numLista, nomComp(a), ...numeros.map((n) => { const it = h.items.find((x) => x.sim.numero === n); return it ? `${it.aciertos}/${it.reactivos}` : "—"; }),
           h.items.length > 1 ? (h.diferencia > 0 ? "+" : "") + h.diferencia + "%" : "—",
           h.items.length ? semaforoDe(h.actual, db.config).label : "—"]; }),
-      config: db.config, ciclo: db.ciclo,
+      config: membrete(db, grupoId), ciclo: db.ciclo,
       resumen: analisis ? [{ label: "Promedio de aciertos", valor: `${analisis.promedioAciertos}/${maxTotal}` }, { label: "Promedio del grupo", valor: analisis.promedio + "%" }, { label: "Mejor área", valor: analisis.mejorMateria?.nombre || "—" }, { label: "Mayor reforzamiento", valor: analisis.areaRefuerzo?.nombre || "—" }] : null,
       nota: AVISO_ECOEMS,
     });
@@ -2201,7 +2403,7 @@ function Ecoems({ db, upd, ir, toast }) {
     <div className="space-y-4">
       <Titulo sub={`Simulador de ${maxTotal} aciertos en ${mats.length} áreas. Captura, comparación y semáforo académico.`}>Simulador ECOEMS</Titulo>
       <div className="flex gap-2 flex-wrap items-center">
-        <Sel value={grupoId} onChange={(e) => setGrupoId(e.target.value)} className="max-w-[170px]">{db.grupos.map((g) => <option key={g.id} value={g.id}>{g.grado}° {g.grupo}</option>)}</Sel>
+        <Sel value={grupoId} onChange={(e) => setGrupoId(e.target.value)} className="max-w-[170px]">{db.grupos.map((g) => <option key={g.id} value={g.id}>{etiquetaGrupo(db, g)}</option>)}</Sel>
         {maxTotal !== 128 && <span className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1">Las áreas suman {maxTotal} aciertos. Ajusta el catálogo en Configuración si esperabas 128.</span>}
       </div>
       <Tabs activa={tab} set={setTab} tabs={[{ id: "captura", label: "Captura" }, { id: "concentrado", label: "Concentrado" }, { id: "analisis", label: "Análisis" }, { id: "comparativo", label: "Comparativo" }, { id: "ingreso", label: "Proceso de ingreso" }]} />
@@ -2560,7 +2762,7 @@ function Incidencias({ db, upd, ir, toast, params }) {
     const a = db.alumnos.find((x) => x.id === i.alumnoId);
     const g = db.grupos.find((x) => x.id === i.grupoId);
     pdfIncidencia({
-      incidencia: i, config: db.config, ciclo: db.ciclo,
+      incidencia: i, config: membrete(db, i.grupoId), ciclo: db.ciclo,
       alumno: nomComp(a),
       grupo: g ? `${g.grado}° ${g.grupo} · ${g.turno}` : "—",
       avisoLegal: AVISO_CONVIVENCIA,
@@ -2628,7 +2830,7 @@ function Incidencias({ db, upd, ir, toast, params }) {
             <div className="grid sm:grid-cols-2 gap-3">
               <Campo label="Fecha"><Inp type="date" value={modal.fecha} onChange={(e) => setModal({ ...modal, fecha: e.target.value })} /></Campo>
               <Campo label="Hora"><Inp type="time" value={modal.hora} onChange={(e) => setModal({ ...modal, hora: e.target.value })} /></Campo>
-              <Campo label="Grupo"><Sel value={modal.grupoId} onChange={(e) => setModal({ ...modal, grupoId: e.target.value, alumnoId: "" })}>{db.grupos.map((g) => <option key={g.id} value={g.id}>{g.grado}° {g.grupo}</option>)}</Sel></Campo>
+              <Campo label="Grupo"><Sel value={modal.grupoId} onChange={(e) => setModal({ ...modal, grupoId: e.target.value, alumnoId: "" })}>{db.grupos.map((g) => <option key={g.id} value={g.id}>{etiquetaGrupo(db, g)}</option>)}</Sel></Campo>
               <Campo label="Alumna(o)" req><Sel value={modal.alumnoId} onChange={(e) => setModal({ ...modal, alumnoId: e.target.value })}><option value="">Selecciona</option>{sortAl(db.alumnos.filter((a) => a.grupoId === modal.grupoId && a.activo)).map((a) => <option key={a.id} value={a.id}>{a.numLista}. {nomComp(a)}</option>)}</Sel></Campo>
               <Campo label="Docente que reporta"><Inp value={modal.docente} onChange={(e) => setModal({ ...modal, docente: e.target.value })} /></Campo>
               <Campo label="Lugar"><Inp value={modal.lugar} onChange={(e) => setModal({ ...modal, lugar: e.target.value })} /></Campo>
@@ -2836,7 +3038,7 @@ function Bitacora({ db, upd, ir, toast }) {
   const [seccion, setSeccion] = useState("datos");
 
   const nueva = () => ({
-    grupoId, fecha: hoy(), trimestre: trimestreDe(hoy(), db.config), sesion: db.bitacoras.filter((b) => b.grupoId === grupoId).length + 1, horario: db.config.horario || "",
+    grupoId, fecha: hoy(), trimestre: trimestreDe(hoy(), db.config), sesion: db.bitacoras.filter((b) => b.grupoId === grupoId && Number(b.trimestre) === trimestreDe(hoy(), db.config)).length + 1, horario: db.config.horario || "",
     campoFormativo: "", contenido: "", pda: "", eje: "", proposito: "",
     inicioAct: "", inicioPregunta: "", inicioPrevios: "", desarrollo: "", estrategias: "", individual: "", colaborativo: "", recursos: "",
     cierreProducto: "", cierreEvidencia: "", cierreReflexion: "", cierreTarea: "",
@@ -2845,7 +3047,7 @@ function Bitacora({ db, upd, ir, toast }) {
   });
 
   const conteoSesion = (gid, f) => {
-    const regs = db.asistencias.filter((x) => x.grupoId === gid && x.fecha === f).flatMap((x) => Object.entries(x.marcas || {}));
+    const regs = db.asistencias.filter((x) => x.grupoId === gid && x.fecha === f && !x.sinClase).flatMap((x) => Object.entries(x.marcas || {}));
     if (!regs.length) return null;
     const vistos = {};
     regs.forEach(([al, m]) => { vistos[al] = m; });
@@ -2871,7 +3073,7 @@ function Bitacora({ db, upd, ir, toast }) {
     <div className="space-y-4">
       <Titulo sub="Registro de cada sesión: planeación, desarrollo, evaluación y reflexión docente."
         right={<Btn icon={Plus} onClick={() => { setModal(nueva()); setSeccion("datos"); }} disabled={!db.grupos.length}>Nueva sesión</Btn>}>Bitácora de clase</Titulo>
-      <Sel value={grupoId} onChange={(e) => setGrupoId(e.target.value)} className="max-w-[170px]">{db.grupos.map((g) => <option key={g.id} value={g.id}>{g.grado}° {g.grupo}</option>)}</Sel>
+      <Sel value={grupoId} onChange={(e) => setGrupoId(e.target.value)} className="max-w-[170px]">{db.grupos.map((g) => <option key={g.id} value={g.id}>{etiquetaGrupo(db, g)}</option>)}</Sel>
 
       {lista.length === 0 ? <Card><Vacio texto="Aún no hay sesiones registradas para este grupo." /></Card> : (
         <div className="space-y-2">
@@ -2913,9 +3115,9 @@ function Bitacora({ db, upd, ir, toast }) {
             </div>
             {seccion === "datos" && (
               <div className="grid sm:grid-cols-2 gap-3">
-                <Campo label="Grupo"><Sel value={modal.grupoId} onChange={(e) => setModal({ ...modal, grupoId: e.target.value })}>{db.grupos.map((g) => <option key={g.id} value={g.id}>{g.grado}° {g.grupo}</option>)}</Sel></Campo>
+                <Campo label="Grupo"><Sel value={modal.grupoId} onChange={(e) => setModal({ ...modal, grupoId: e.target.value })}>{db.grupos.map((g) => <option key={g.id} value={g.id}>{etiquetaGrupo(db, g)}</option>)}</Sel></Campo>
                 <Campo label="Fecha"><Inp type="date" value={modal.fecha} onChange={(e) => setModal({ ...modal, fecha: e.target.value, trimestre: trimestreDe(e.target.value, db.config) })} /></Campo>
-                <Campo label="Número de sesión"><Inp type="number" value={modal.sesion} onChange={(e) => setModal({ ...modal, sesion: e.target.value })} /></Campo>
+                <Campo label="Número de sesión" hint="Dentro del trimestre."><Inp type="number" min="1" max={MAX_CLASES} value={modal.sesion} onChange={(e) => setModal({ ...modal, sesion: e.target.value })} /></Campo>
                 <Campo label="Horario"><Inp value={modal.horario} onChange={(e) => setModal({ ...modal, horario: e.target.value })} placeholder="08:00 - 08:50" /></Campo>
                 <Campo label="Trimestre"><Sel value={modal.trimestre} onChange={(e) => setModal({ ...modal, trimestre: e.target.value })}>{[1, 2, 3].map((t) => <option key={t} value={t}>Trimestre {t}</option>)}</Sel></Campo>
                 <Campo label="Estado de la sesión"><Sel value={modal.estado} onChange={(e) => setModal({ ...modal, estado: e.target.value })}>{EST_BIT.map((s) => <option key={s}>{s}</option>)}</Sel></Campo>
@@ -3037,12 +3239,12 @@ function TableroGrupo({ db, ir, params }) {
   return (
     <div className="space-y-4">
       <Titulo sub="Vista completa del grupo: asistencia, evaluación, entregas, convivencia y ECOEMS."
-        right={<Sel value={grupoId} onChange={(e) => setGrupoId(e.target.value)} className="max-w-[150px]">{db.grupos.map((x) => <option key={x.id} value={x.id}>{x.grado}° {x.grupo}</option>)}</Sel>}>Tablero {g.grado}° {g.grupo}</Titulo>
+        right={<Sel value={grupoId} onChange={(e) => setGrupoId(e.target.value)} className="max-w-[150px]">{db.grupos.map((x) => <option key={x.id} value={x.id}>{etiquetaGrupo(db, x)}</option>)}</Sel>}>Tablero {g.grado}° {g.grupo}</Titulo>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <Stat label="Estudiantes" valor={alumnos.length} />
-        <Stat label="Asistencia" valor={asis.porcentaje + "%"} sub={`${asis.sesiones} sesiones`} color="text-emerald-700" />
-        <Stat label="Faltas" valor={asis.F} color={asis.F ? "text-rose-600" : "text-slate-900"} />
+        <Stat label="Asistencia" valor={asis.porcentaje + "%"} sub={`${clasesImpartidas(db, grupoId)} clases dadas`} color="text-emerald-700" />
+        <Stat label="Faltas" valor={asis.F} sub={`de ${clasesImpartidas(db, grupoId) * alumnos.length} posibles`} color={asis.F ? "text-rose-700" : "text-slate-900"} />
         <Stat label="Retardos" valor={asis.R} />
       </div>
 
@@ -3123,7 +3325,7 @@ function Estadisticas({ db, ir }) {
 
   const filtros = (
     <div className="flex gap-2 flex-wrap">
-      <Sel value={grupoId} onChange={(e) => setGrupoId(e.target.value)} className="max-w-[170px]"><option value="">Todos los grupos</option>{db.grupos.map((g) => <option key={g.id} value={g.id}>{g.grado}° {g.grupo}</option>)}</Sel>
+      <Sel value={grupoId} onChange={(e) => setGrupoId(e.target.value)} className="max-w-[170px]"><option value="">Todos los grupos</option>{db.grupos.map((g) => <option key={g.id} value={g.id}>{etiquetaGrupo(db, g)}</option>)}</Sel>
       <Sel value={trim} onChange={(e) => setTrim(Number(e.target.value))} className="max-w-[160px]"><option value={0}>Todo el ciclo</option>{[1, 2, 3].map((t) => <option key={t} value={t}>Trimestre {t}</option>)}</Sel>
       <input type="date" value={rango.desde} onChange={(e) => setRango({ ...rango, desde: e.target.value })} className={inputCls + " max-w-[150px]"} title="Desde" />
       <input type="date" value={rango.hasta} onChange={(e) => setRango({ ...rango, hasta: e.target.value })} className={inputCls + " max-w-[150px]"} title="Hasta" />
@@ -3160,7 +3362,7 @@ function Estadisticas({ db, ir }) {
           return [nomComp(a), h.items.length, h.items.length ? h.inicial + "%" : "—", h.items.length ? h.actual + "%" : "—", h.items.length > 1 ? (h.diferencia > 0 ? "+" : "") + h.diferencia + "%" : "—"]; }) }),
     };
     const t = (tablas[tab] || tablas.asistencia)();
-    pdfTabla({ ...t, subtitulo: sub, config: db.config, ciclo: db.ciclo,
+    pdfTabla({ ...t, subtitulo: sub, config: grupoId ? membrete(db, grupoId) : db.config, ciclo: db.ciclo,
       nota: "Las estadísticas sirven para organizar el acompañamiento docente. No se utilizan para exhibir ni etiquetar a las alumnas y los alumnos." });
   };
 
@@ -3195,13 +3397,17 @@ function Estadisticas({ db, ir }) {
             </ResponsiveContainer>
           </Card>
           <Card pad={false} className="p-4">
-            <Tabla cols={["Nombre", "Clases", "A", "F", "J", "R", "P", "%"]}>
+            <Tabla cols={["Nombre", "Faltas", "Clases dadas", "A", "J", "R", "P", "%"]}>
               {alumnos.map((a) => { const s = statsAsistencia(db, a.id, { trim: trim || undefined, desde: rango.desde || undefined, hasta: rango.hasta || undefined });
+                const dadas = clasesImpartidas(db, a.grupoId, trim || undefined);
                 return (
                   <tr key={a.id} className="hover:bg-slate-50 cursor-pointer" onClick={() => ir("ficha", { alumnoId: a.id })}>
-                    <td className="py-2 px-3">{nomComp(a)}</td><td className="py-2 px-3 text-slate-500">{s.total}</td>
-                    {ORDEN_EST.map((k) => <td key={k} className="py-2 px-3">{s[k]}</td>)}
-                    <td className={`py-2 px-3 font-medium ${s.porcentaje >= db.config.alertas.asistenciaMin ? "text-emerald-700" : "text-amber-600"}`}>{s.total ? s.porcentaje + "%" : "—"}</td>
+                    <td className="py-2 px-3">{nomComp(a)}</td>
+                    <td className={`py-2 px-3 font-semibold ${s.F ? "text-rose-700" : "text-slate-500"}`}>{s.F} de {dadas}</td>
+                    <td className="py-2 px-3 text-slate-500">{dadas}</td>
+                    <td className="py-2 px-3">{s.A}</td><td className="py-2 px-3">{s.J}</td>
+                    <td className="py-2 px-3">{s.R}</td><td className="py-2 px-3">{s.P}</td>
+                    <td className={`py-2 px-3 font-medium ${s.porcentaje >= db.config.alertas.asistenciaMin ? "text-emerald-700" : "text-amber-700"}`}>{s.total ? s.porcentaje + "%" : "—"}</td>
                   </tr>
                 ); })}
             </Tabla>
@@ -3283,11 +3489,15 @@ function Reportes({ db, toast }) {
   const g = db.grupos.find((x) => x.id === grupoId);
   const alumnos = sortAl(db.alumnos.filter((a) => a.grupoId === grupoId && a.activo));
   const encabezadoTexto = [g ? `${g.grado}° ${g.grupo}` : "", db.config.docente || "", trim ? `Trimestre ${trim}` : "Todo el ciclo", tipo === "materia" && materia ? materia : ""].filter(Boolean).join("   ·   ");
+  const escuelaSel = escuelaDeGrupo(db, grupoId);
 
   const armar = () => {
     if (tipo === "asistencia") {
-      const filas = alumnos.map((a) => { const s = statsAsistencia(db, a.id, { grupoId, trim: trim || undefined }); return [a.numLista, nomComp(a), s.total, s.A, s.F, s.J, s.R, s.P, s.porcentaje + "%"]; });
-      return { titulo: "Reporte de asistencia", cols: ["No.", "Nombre", "Clases", "Asist.", "Faltas", "Just.", "Ret.", "Perm.", "%"], filas };
+      const dadas = clasesImpartidas(db, grupoId, trim || undefined);
+      const filas = alumnos.map((a) => { const s = statsAsistencia(db, a.id, { grupoId, trim: trim || undefined });
+        return [a.numLista, nomComp(a), dadas, `${s.F} de ${dadas}`, s.A, s.J, s.R, s.P, s.porcentaje + "%"]; });
+      return { titulo: "Reporte de asistencia",
+        cols: ["No.", "Nombre", "Clases dadas", "Faltas", "Asist.", "Just.", "Ret.", "Perm.", "%"], filas };
     }
     if (tipo === "evaluacion") {
       const filas = alumnos.map((a) => [a.numLista, nomComp(a), ...[1, 2, 3].map((t) => calificacionTrimestre(db, a.id, t).final || "—"), promedioAcumulado(db, a.id) || "—"]);
@@ -3372,16 +3582,19 @@ function Reportes({ db, toast }) {
     }
     const filas = alumnos.map((a) => {
       const s = statsAsistencia(db, a.id, { grupoId }); const ac = statsActividades(db, a.id); const h = historialEcoems(db, a.id);
-      return [a.numLista, nomComp(a), s.porcentaje + "%", promedioAcumulado(db, a.id) || "—", `${ac.entregadas}/${ac.asignadas}`, db.incidencias.filter((i) => i.alumnoId === a.id).length, h.items.length ? h.actual + "%" : "—"];
+      return [a.numLista, nomComp(a), `${s.F} de ${clasesImpartidas(db, grupoId)}`, s.porcentaje + "%", promedioAcumulado(db, a.id) || "—", `${ac.entregadas}/${ac.asignadas}`, db.incidencias.filter((i) => i.alumnoId === a.id).length, h.items.length ? h.actual + "%" : "—"];
     });
-    return { titulo: "Reporte integral del grupo", cols: ["No.", "Nombre", "Asistencia", "Promedio", "Entregas", "Incidencias", "ECOEMS"], filas };
+    return { titulo: "Reporte integral del grupo", cols: ["No.", "Nombre", "Faltas", "Asistencia", "Promedio", "Entregas", "Incidencias", "ECOEMS"], filas };
   };
 
   const r = armar();
   const resumenPDF = () => {
     if (tipo === "asistencia") {
       const st = statsGrupoAsistencia(db, grupoId, trim || undefined);
-      return [{ label: "Estudiantes", valor: alumnos.length }, { label: "Asistencia", valor: st.porcentaje + "%" }, { label: "Faltas", valor: st.F }, { label: "Retardos", valor: st.R }];
+      return [{ label: "Clases dadas", valor: clasesImpartidas(db, grupoId, trim || undefined) },
+        { label: "Estudiantes", valor: alumnos.length },
+        { label: "Asistencia", valor: st.porcentaje + "%" },
+        { label: "Total de faltas", valor: st.F }];
     }
     if (tipo === "evaluacion" || tipo === "integral") {
       const ps = alumnos.map((a) => promedioAcumulado(db, a.id)).filter((x) => x > 0);
@@ -3423,7 +3636,7 @@ function Reportes({ db, toast }) {
   const aPDF = () => {
     pdfTabla({
       titulo: r.titulo, subtitulo: encabezadoTexto, columnas: r.cols, filas: r.filas,
-      config: db.config, ciclo: db.ciclo, resumen: resumenPDF(),
+      config: membrete(db, grupoId), ciclo: db.ciclo, resumen: resumenPDF(),
       nota: "Documento generado para seguimiento docente. La información de las alumnas y los alumnos es confidencial y su uso se limita a fines educativos.",
     });
     toast("PDF descargado");
@@ -3447,7 +3660,7 @@ function Reportes({ db, toast }) {
               <option value="bitacora">Bitácora</option><option value="integral">Integral del grupo</option>
             </Sel>
           </Campo>
-          <Campo label="Grupo"><Sel value={grupoId} onChange={(e) => setGrupoId(e.target.value)}>{db.grupos.map((x) => <option key={x.id} value={x.id}>{x.grado}° {x.grupo}</option>)}</Sel></Campo>
+          <Campo label="Grupo"><Sel value={grupoId} onChange={(e) => setGrupoId(e.target.value)}>{db.grupos.map((x) => <option key={x.id} value={x.id}>{etiquetaGrupo(db, x)}</option>)}</Sel></Campo>
           <Campo label="Periodo"><Sel value={trim} onChange={(e) => setTrim(Number(e.target.value))}><option value={0}>Todo el ciclo</option>{[1, 2, 3].map((t) => <option key={t} value={t}>Trimestre {t}</option>)}</Sel></Campo>
           {tipo === "materia" && <Campo label="Materia"><Sel value={materia} onChange={(e) => setMateria(e.target.value)}><option value="">Todas</option>{(db.catalogos.materias || []).map((m) => <option key={m}>{m}</option>)}</Sel></Campo>}
         </div>
@@ -3596,7 +3809,21 @@ function Configuracion({ db, upd, meta, setCiclo, nuevoCiclo, restaurar, toast, 
   const [almacenamiento, setAlmacenamiento] = useState(null);
   const [copias, setCopias] = useState([]);
   const [papelera, setPapelera] = useState([]);
-  useEffect(() => { setC(clone(db.config)); setCat(clone(db.catalogos)); }, [db.ciclo]);
+  const [escuelas, setEscuelas] = useState(db.escuelas || []);
+  useEffect(() => { setC(clone(db.config)); setCat(clone(db.catalogos)); setEscuelas(clone(db.escuelas || [])); }, [db.ciclo]);
+
+  const guardarEscuelas = () => {
+    const limpias = escuelas.filter((e) => e.nombre.trim() || e.cct.trim());
+    if (!limpias.length) return toast("Deja al menos una escuela", "error");
+    upd((d) => {
+      d.escuelas = limpias;
+      const ids = new Set(limpias.map((e) => e.id));
+      d.grupos = d.grupos.map((g) => ({ ...g, escuelaId: ids.has(g.escuelaId) ? g.escuelaId : limpias[0].id }));
+      d.config.escuela = limpias[0].nombre;   // membrete por omisión
+      d.config.cct = limpias[0].cct;
+    });
+    toast("Escuelas guardadas");
+  };
 
   const revisarAlmacenamiento = useCallback(async () => {
     const [perm, esp, cop, pap] = await Promise.all([pedirPermanencia(), espacio(), verRespaldos(), verPapelera()]);
@@ -3682,13 +3909,47 @@ function Configuracion({ db, upd, meta, setCiclo, nuevoCiclo, restaurar, toast, 
       )}
 
       {tab === "escuela" && (
+        <>
         <Card>
+          <div className="flex items-start justify-between gap-3 mb-3 flex-wrap">
+            <div>
+              <p className="text-sm font-semibold text-slate-800">Escuelas</p>
+              <p className="text-xs text-slate-500">Si trabajas en más de una, agrégalas aquí y luego elige cuál le toca a cada grupo. Los reportes salen con el membrete que corresponda.</p>
+            </div>
+            <Btn size="sm" tipo="secundario" icon={Plus} onClick={() => setEscuelas([...(escuelas || []), { id: uid("esc"), nombre: "", cct: "", turno: "Matutino", director: "" }])}>Agregar escuela</Btn>
+          </div>
+          <div className="space-y-3">
+            {(escuelas || []).map((e, i) => (
+              <div key={e.id} className="border-2 border-slate-200 rounded-lg p-3">
+                <div className="grid sm:grid-cols-2 gap-3">
+                  <Campo label="Nombre"><Inp value={e.nombre} onChange={(ev) => { const c2 = [...escuelas]; c2[i] = { ...e, nombre: ev.target.value }; setEscuelas(c2); }} /></Campo>
+                  <Campo label="CCT"><Inp value={e.cct} onChange={(ev) => { const c2 = [...escuelas]; c2[i] = { ...e, cct: ev.target.value.toUpperCase() }; setEscuelas(c2); }} className="font-mono" /></Campo>
+                  <Campo label="Turno"><Sel value={e.turno || "Matutino"} onChange={(ev) => { const c2 = [...escuelas]; c2[i] = { ...e, turno: ev.target.value }; setEscuelas(c2); }}><option>Matutino</option><option>Vespertino</option></Sel></Campo>
+                  <Campo label="Director(a)"><Inp value={e.director || ""} onChange={(ev) => { const c2 = [...escuelas]; c2[i] = { ...e, director: ev.target.value }; setEscuelas(c2); }} /></Campo>
+                </div>
+                <div className="flex items-center justify-between mt-2">
+                  <span className="text-[11px] text-slate-500">{db.grupos.filter((g) => g.escuelaId === e.id).length} grupo(s) en esta escuela</span>
+                  {escuelas.length > 1 && (
+                    <button onClick={() => setConf({
+                      texto: db.grupos.some((g) => g.escuelaId === e.id)
+                        ? `«${e.nombre || "Sin nombre"}» tiene grupos asignados. Al quitarla, esos grupos pasan a la primera escuela de la lista.`
+                        : `¿Quitar «${e.nombre || "Sin nombre"}» de la lista?`,
+                      textoSi: "Quitar",
+                      onSi: () => { setEscuelas(escuelas.filter((_, j) => j !== i)); setConf(null); },
+                    })} className="text-xs text-rose-700 hover:underline">Quitar escuela</button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="flex justify-end mt-4"><Btn icon={Save} onClick={guardarEscuelas}>Guardar escuelas</Btn></div>
+        </Card>
+
+        <Card>
+          <p className="text-sm font-semibold text-slate-800 mb-3">Tus datos y el ciclo</p>
           <div className="grid sm:grid-cols-2 gap-3">
-            <Campo label="Nombre de la escuela"><Inp value={c.escuela} onChange={(e) => setC({ ...c, escuela: e.target.value })} /></Campo>
-            <Campo label="CCT"><Inp value={c.cct} onChange={(e) => setC({ ...c, cct: e.target.value })} /></Campo>
             <Campo label="Docente"><Inp value={c.docente} onChange={(e) => setC({ ...c, docente: e.target.value })} /></Campo>
             <Campo label="Asignatura"><Inp value={c.asignatura} onChange={(e) => setC({ ...c, asignatura: e.target.value })} /></Campo>
-            <Campo label="Turno"><Sel value={c.turno} onChange={(e) => setC({ ...c, turno: e.target.value })}><option>Matutino</option><option>Vespertino</option></Sel></Campo>
             <Campo label="Horario"><Inp value={c.horario} onChange={(e) => setC({ ...c, horario: e.target.value })} placeholder="Lunes a viernes 07:00 - 13:30" /></Campo>
             <Campo label="Trimestre actual"><Sel value={c.trimestre} onChange={(e) => setC({ ...c, trimestre: e.target.value })}>{[1, 2, 3].map((t) => <option key={t} value={t}>Trimestre {t}</option>)}</Sel></Campo>
             <Campo label="Ciclo escolar"><div className="px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-600">{db.ciclo}</div></Campo>
@@ -3705,6 +3966,7 @@ function Configuracion({ db, upd, meta, setCiclo, nuevoCiclo, restaurar, toast, 
           </div>
           <div className="flex justify-end mt-4"><Btn icon={Save} onClick={guardarConfig}>Guardar configuración</Btn></div>
         </Card>
+        </>
       )}
 
       {tab === "catalogos" && (
@@ -4166,7 +4428,7 @@ export default function App() {
     alumnos: <Alumnos {...props} />,
     ficha: <Ficha {...props} />,
     tableroGrupo: <TableroGrupo db={db} ir={ir} params={params} />,
-    asistencia: <Asistencia db={db} upd={upd} toast={toast} />,
+    asistencia: <Asistencia db={db} upd={upd} toast={toast} params={params} />,
     permisos: <Permisos db={db} upd={upd} toast={toast} />,
     actividades: <Actividades db={db} upd={upd} toast={toast} />,
     evaluacion: <Evaluacion {...props} />,
@@ -4188,7 +4450,7 @@ export default function App() {
           <button onClick={() => setMenuAbierto(!menuAbierto)} className={`lg:hidden p-2 rounded-lg hover:bg-white/15 text-white`}><Menu size={20} /></button>
           <div className="grow min-w-0">
             <p className="font-semibold text-white leading-tight truncate">{dom.nombre}</p>
-            <p className={`text-[11px] ${dom.texto} truncate`}>{db.config.escuela || "Configura tu escuela"} · Ciclo {db.ciclo}</p>
+            <p className={`text-[11px] ${dom.texto} truncate`}>{(db.escuelas || []).length > 1 ? `${(db.escuelas || []).length} escuelas` : (db.escuelas?.[0]?.nombre || db.config.escuela || "Configura tu escuela")} · Ciclo {db.ciclo}</p>
           </div>
           {!enLinea && (
             <span title="La app funciona sin internet" className="inline-flex items-center gap-1 text-[11px] text-white bg-white/20 rounded-md px-1.5 py-1">
