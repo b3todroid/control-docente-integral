@@ -24,11 +24,11 @@ const norm = (s) => String(s || "").toLowerCase().normalize("NFD").replace(/[\u0
 
 /* ---------- catálogos base ---------- */
 const EST = {
-  A: { label: "Asistencia", corto: "A", full: "bg-emerald-600 text-white border-emerald-600", soft: "bg-emerald-50 text-emerald-700 border-emerald-200", dot: "#059669" },
-  F: { label: "Falta", corto: "F", full: "bg-rose-600 text-white border-rose-600", soft: "bg-rose-50 text-rose-700 border-rose-200", dot: "#e11d48" },
-  J: { label: "Justificada", corto: "J", full: "bg-sky-600 text-white border-sky-600", soft: "bg-sky-50 text-sky-700 border-sky-200", dot: "#0284c7" },
-  R: { label: "Retardo", corto: "R", full: "bg-amber-500 text-white border-amber-500", soft: "bg-amber-50 text-amber-700 border-amber-200", dot: "#f59e0b" },
-  P: { label: "Permiso", corto: "P", full: "bg-violet-600 text-white border-violet-600", soft: "bg-violet-50 text-violet-700 border-violet-200", dot: "#7c3aed" },
+  A: { label: "Asistencia", corto: "A", full: "bg-emerald-700 text-white", soft: "bg-emerald-50 text-emerald-800 border-emerald-200", dot: "#0B4A2C" },
+  F: { label: "Falta", corto: "F", full: "bg-rose-700 text-white", soft: "bg-rose-50 text-rose-800 border-rose-200", dot: "#7F1527" },
+  J: { label: "Justificada", corto: "J", full: "bg-sky-700 text-white", soft: "bg-sky-50 text-sky-800 border-sky-200", dot: "#1B3A9C" },
+  R: { label: "Retardo", corto: "R", full: "bg-amber-600 text-white", soft: "bg-amber-50 text-amber-800 border-amber-200", dot: "#92640C" },
+  P: { label: "Permiso", corto: "P", full: "bg-violet-600 text-white", soft: "bg-violet-50 text-violet-800 border-violet-200", dot: "#4C3180" },
 };
 const ORDEN_EST = ["A", "F", "J", "R", "P"];
 
@@ -98,6 +98,11 @@ const catalogosBase = () => ({
     { id: "ins_proy", nombre: "Proyecto", porcentaje: 20 },
     { id: "ins_exa", nombre: "Examen", porcentaje: 30 },
   ],
+  opcionesIngreso: [
+    { n: 1, nombre: "Acceso directo (sin examen)", examen: false },
+    { n: 2, nombre: "Acceso con examen", examen: true },
+    { n: 3, nombre: "Modalidad mixta", examen: true },
+  ],
   materiasEcoems: [
     { id: "e_esp", nombre: "Español", reactivos: 12 },
     { id: "e_hverb", nombre: "Habilidad verbal", reactivos: 16 },
@@ -149,6 +154,9 @@ function normalizarDb(d, ciclo) {
     if (!Array.isArray(out.catalogos[k]) || !out.catalogos[k].length) out.catalogos[k] = base.catalogos[k];
   });
   if (typeof out.folio !== "number") out.folio = 0;
+  out.alumnos = out.alumnos.map((a) => ({
+    ingresoOpcion: "", ingresoFolio: "", ingresoPuntaje: "", ingresoEscuela: "", ingresoObs: "", ...a,
+  }));
   return out;
 }
 
@@ -183,6 +191,7 @@ function generarDemo(ciclo) {
     curp: "XXXX000000XXXXXX00", turno: "Matutino", tutorGrupo: "Docente de prueba",
     tutorNombre: `Tutor(a) de ${n[1]}`, tutorTelefono: "55 0000 0000", tutorCorreo: "",
     estatus: "Activo", activo: true, observaciones: "",
+    ingresoOpcion: "", ingresoFolio: "", ingresoPuntaje: "", ingresoEscuela: "", ingresoObs: "",
   }));
 
   // asistencia: 20 sesiones
@@ -306,10 +315,10 @@ const sSet = async (k, v) => (await guardar(k, v)).ok;
    ============================================================ */
 const Btn = ({ children, onClick, tipo = "primario", size = "md", icon: Icon, className = "", disabled, title }) => {
   const tipos = {
-    primario: "bg-emerald-700 text-white hover:bg-emerald-800 border-emerald-700",
-    secundario: "bg-white text-slate-700 hover:bg-slate-50 border-slate-300",
-    peligro: "bg-rose-600 text-white hover:bg-rose-700 border-rose-600",
-    suave: "bg-slate-100 text-slate-700 hover:bg-slate-200 border-slate-200",
+    primario: "bg-emerald-700 text-white hover:bg-emerald-800 border-emerald-700 font-semibold",
+    secundario: "bg-white text-slate-800 hover:bg-slate-50 border-slate-300 border-2",
+    peligro: "bg-rose-700 text-white hover:bg-rose-800 border-rose-700 font-semibold",
+    suave: "bg-slate-100 text-slate-800 hover:bg-slate-200 border-slate-200",
     fantasma: "bg-transparent text-slate-600 hover:bg-slate-100 border-transparent",
   };
   const sizes = { sm: "px-2.5 py-1.5 text-xs gap-1", md: "px-3.5 py-2 text-sm gap-1.5", lg: "px-5 py-2.5 text-base gap-2" };
@@ -322,7 +331,7 @@ const Btn = ({ children, onClick, tipo = "primario", size = "md", icon: Icon, cl
 };
 
 const Card = ({ children, className = "", pad = true }) => (
-  <div className={`bg-white border border-slate-200 rounded-xl ${pad ? "p-4" : ""} ${className}`}>{children}</div>
+  <div className={`bg-white border border-slate-300 rounded-lg ${pad ? "p-4" : ""} ${className}`}>{children}</div>
 );
 
 const Titulo = ({ children, sub, right }) => (
@@ -373,13 +382,13 @@ const Confirmar = ({ open, texto, onSi, onNo, textoSi = "Eliminar" }) => (
 );
 
 const Stat = ({ label, valor, sub, color = "text-slate-900", icon: Icon, onClick }) => (
-  <div onClick={onClick} className={`bg-white border border-slate-200 rounded-xl p-3.5 ${onClick ? "cursor-pointer hover:border-emerald-400" : ""}`}>
+  <div onClick={onClick} className={`bg-white border border-slate-300 rounded-lg p-3.5 ${onClick ? "cursor-pointer hover:border-slate-500" : ""}`}>
     <div className="flex items-center justify-between">
       <span className="text-xs text-slate-500 font-medium">{label}</span>
-      {Icon && <Icon size={15} className="text-slate-300" />}
+      {Icon && <Icon size={15} className="text-slate-400" />}
     </div>
-    <div className={`text-2xl font-semibold mt-1 ${color}`}>{valor}</div>
-    {sub && <div className="text-[11px] text-slate-400 mt-0.5">{sub}</div>}
+    <div className={`cifras text-2xl font-bold mt-1 ${color}`}>{valor}</div>
+    {sub && <div className="text-[11px] text-slate-500 mt-0.5">{sub}</div>}
   </div>
 );
 
@@ -511,6 +520,34 @@ function historialEcoems(db, alumnoId) {
   const ini = items[0]?.porcentaje || 0;
   const act = items[items.length - 1]?.porcentaje || 0;
   return { items, inicial: ini, actual: act, diferencia: round(act - ini, 1), avance: ini > 0 ? round(((act - ini) / ini) * 100, 1) : 0 };
+}
+
+/* Proceso de ingreso a media superior, solo para tercero.
+   El puntaje se compara contra el último simulador del mismo alumno. */
+function opcionIngreso(db, n) {
+  return (db.catalogos.opcionesIngreso || []).find((o) => Number(o.n) === Number(n)) || null;
+}
+function llevaExamen(db, n) {
+  const o = opcionIngreso(db, n);
+  return o ? !!o.examen : false;
+}
+function datosIngreso(db, alumno) {
+  const maxTotal = (db.catalogos.materiasEcoems || []).reduce((t, m) => t + Number(m.reactivos || 0), 0) || 128;
+  const h = historialEcoems(db, alumno.id);
+  const ultimo = h.items.length ? h.items[h.items.length - 1] : null;
+  const real = alumno.ingresoPuntaje === "" || alumno.ingresoPuntaje === undefined ? null : Number(alumno.ingresoPuntaje);
+  return {
+    opcion: alumno.ingresoOpcion || "",
+    examen: llevaExamen(db, alumno.ingresoOpcion),
+    folio: alumno.ingresoFolio || "",
+    escuela: alumno.ingresoEscuela || "",
+    real,
+    porcentaje: real === null ? null : pct(real, maxTotal),
+    simulador: ultimo ? ultimo.aciertos : null,
+    simuladorNum: ultimo ? ultimo.sim.numero : null,
+    diferencia: real !== null && ultimo ? real - ultimo.aciertos : null,
+    maxTotal,
+  };
 }
 
 function alertas(db) {
@@ -1029,6 +1066,17 @@ function Ficha({ db, ir, params, toast }) {
         { titulo: "Simulador ECOEMS",
           columnas: ["Aplicación", "Fecha", "Aciertos", "Máximo", "Porcentaje", "Semáforo"],
           filas: eco.items.map((x) => [x.sim.numero, fFecha(x.sim.fecha), x.aciertos, x.reactivos, x.porcentaje + "%", semaforoDe(x.porcentaje, db.config).label]) },
+        ...(g && Number(g.grado) === 3 ? [(() => {
+          const ing = datosIngreso(db, a);
+          const opc = opcionIngreso(db, ing.opcion);
+          return { titulo: "Proceso de ingreso a media superior",
+            columnas: ["Opción", "Folio", "Puntaje", "Simulador", "Diferencia", "Escuela asignada"],
+            filas: [[opc ? `${opc.n} · ${opc.nombre}` : "Sin elegir", ing.folio || "—",
+              ing.real === null ? (ing.examen ? "Pendiente" : "No aplica") : `${ing.real}/${ing.maxTotal}`,
+              ing.simulador === null ? "—" : `${ing.simulador}/${ing.maxTotal}`,
+              ing.diferencia === null ? "—" : `${ing.diferencia > 0 ? "+" : ""}${ing.diferencia}`,
+              ing.escuela || "Pendiente"]] };
+        })()] : []),
         { titulo: "Incidencias y seguimiento",
           columnas: ["Folio", "Fecha", "Conducta", "Clasificación", "Estatus", "Seguimientos"],
           filas: incs.map((i) => [i.folio, fFecha(i.fecha), i.conducta || i.tipo, i.gravedad || "—", i.estado, (i.seguimientos || []).length]) },
@@ -1087,6 +1135,7 @@ function Ficha({ db, ir, params, toast }) {
       <Tabs activa={tab} set={setTab} tabs={[
         { id: "academico", label: "Académico" }, { id: "asistencia", label: "Asistencia" }, { id: "actividades", label: "Actividades" },
         { id: "incidencias", label: "Incidencias" }, { id: "permisos", label: "Permisos" }, { id: "ecoems", label: "ECOEMS" },
+        ...(g && Number(g.grado) === 3 ? [{ id: "ingreso", label: "Ingreso" }] : []),
       ]} />
 
       {tab === "academico" && (
@@ -1159,6 +1208,29 @@ function Ficha({ db, ir, params, toast }) {
           )}
         </Card>
       )}
+
+      {tab === "ingreso" && (() => {
+        const ing = datosIngreso(db, a);
+        const opc = opcionIngreso(db, ing.opcion);
+        return (
+          <Card>
+            {!ing.opcion && !ing.folio ? <Vacio texto="Todavía no se captura su proceso de ingreso." accion={<Btn onClick={() => ir("ecoems")}>Ir a capturar</Btn>} /> : (
+              <Tabla cols={["Dato", "Registro"]}>
+                <tr><td className="py-2 px-3 text-slate-600">Opción</td><td className="py-2 px-3 font-medium">{opc ? `${opc.n} · ${opc.nombre}` : "Sin elegir"}</td></tr>
+                <tr><td className="py-2 px-3 text-slate-600">Folio</td><td className="py-2 px-3 font-mono">{ing.folio || "—"}</td></tr>
+                <tr><td className="py-2 px-3 text-slate-600">Puntaje del examen</td>
+                  <td className="py-2 px-3 font-medium">{ing.real === null ? (ing.examen ? "Pendiente" : "No aplica en esta opción") : `${ing.real} de ${ing.maxTotal} · ${ing.porcentaje}%`}</td></tr>
+                <tr><td className="py-2 px-3 text-slate-600">Último simulador</td>
+                  <td className="py-2 px-3">{ing.simulador === null ? "—" : `${ing.simulador} de ${ing.maxTotal}`}</td></tr>
+                <tr><td className="py-2 px-3 text-slate-600">Diferencia</td>
+                  <td className={`py-2 px-3 font-semibold ${ing.diferencia === null ? "" : ing.diferencia >= 0 ? "text-emerald-700" : "text-amber-700"}`}>
+                    {ing.diferencia === null ? "—" : `${ing.diferencia > 0 ? "+" : ""}${ing.diferencia} aciertos`}</td></tr>
+                <tr><td className="py-2 px-3 text-slate-600">Escuela asignada</td><td className="py-2 px-3 font-medium">{ing.escuela || "Pendiente"}</td></tr>
+              </Tabla>
+            )}
+          </Card>
+        );
+      })()}
 
       {tab === "ecoems" && (
         <Card>
@@ -1255,17 +1327,19 @@ function Asistencia({ db, upd, toast }) {
               {alumnos.map((a) => (
                 <div key={a.id} className="py-2 px-1">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="w-6 text-xs text-slate-400 shrink-0">{a.numLista}</span>
-                    <span className="grow min-w-[120px] text-sm text-slate-800">{nomComp(a)}</span>
-                    <div className="flex gap-1">
-                      {ORDEN_EST.map((k) => (
-                        <button key={k} onClick={() => marcar(a.id, k)} title={EST[k].label}
-                          className={`w-9 h-9 rounded-lg border text-xs font-semibold transition-colors ${marcas[a.id] === k ? EST[k].full : "bg-white text-slate-400 border-slate-200 hover:border-slate-400"}`}>
-                          {EST[k].corto}
-                        </button>
-                      ))}
-                      <button onClick={() => setAbierto(abierto === a.id ? null : a.id)} title="Observación o justificación"
-                        className={`w-9 h-9 rounded-lg border text-xs transition-colors ${notas[a.id] ? "bg-slate-800 text-white border-slate-800" : "bg-white text-slate-300 border-slate-200 hover:border-slate-400"}`}>
+                    <span className="cifras w-6 text-xs font-semibold text-slate-500 shrink-0">{a.numLista}</span>
+                    <span className="grow min-w-[110px] text-sm font-medium text-slate-900">{nomComp(a)}</span>
+                    <div className="flex items-center gap-1.5">
+                      <div className="flex gap-0.5 bg-slate-100 rounded-lg p-0.5">
+                        {ORDEN_EST.map((k) => (
+                          <button key={k} onClick={() => marcar(a.id, k)} title={EST[k].label} aria-label={EST[k].label}
+                            className={`w-9 h-9 rounded-md text-sm font-bold transition-colors ${marcas[a.id] === k ? EST[k].full : "text-slate-600 hover:bg-white"}`}>
+                            {EST[k].corto}
+                          </button>
+                        ))}
+                      </div>
+                      <button onClick={() => setAbierto(abierto === a.id ? null : a.id)} title="Observación o justificación" aria-label="Observación o justificación"
+                        className={`w-9 h-9 rounded-lg border-2 transition-colors ${notas[a.id] ? "bg-slate-800 text-white border-slate-800" : "bg-white text-slate-500 border-slate-300 hover:border-slate-500"}`}>
                         <NotebookPen size={14} className="mx-auto" />
                       </button>
                     </div>
@@ -1286,8 +1360,13 @@ function Asistencia({ db, upd, toast }) {
 
           <div className="sticky bottom-16 lg:bottom-4 z-20">
             <Card className="flex items-center justify-between gap-3 flex-wrap shadow-lg">
-              <div className="flex gap-2 flex-wrap text-xs">
-                {ORDEN_EST.map((k) => <Pill key={k} cls={EST[k].soft}>{EST[k].label}: {conteo[k]}</Pill>)}
+              <div className="flex gap-1.5 flex-wrap">
+                {ORDEN_EST.filter((k) => conteo[k] > 0).map((k) => (
+                  <span key={k} className={`cifras inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold ${EST[k].full}`}>
+                    {conteo[k]} {EST[k].label.toLowerCase()}
+                  </span>
+                ))}
+                {ORDEN_EST.every((k) => conteo[k] === 0) && <span className="text-xs text-slate-500">Sin marcar</span>}
               </div>
               <Btn icon={Save} onClick={guardar} disabled={!sucio && !!registro}>Guardar asistencia</Btn>
             </Card>
@@ -1725,6 +1804,61 @@ function Ecoems({ db, upd, ir, toast }) {
     return { nombre: `${g.grado}°${g.grupo}`, aplicacion: ult, aciertos: round(rr.reduce((a, b) => a + b.aciertos, 0) / rr.length, 1), promedio: round(rr.reduce((a, b) => a + b.porcentaje, 0) / rr.length, 1) };
   }).filter(Boolean), [db]);
 
+  const setIngreso = (alumnoId, campo, valor) => upd((d) => {
+    const i = d.alumnos.findIndex((a) => a.id === alumnoId);
+    if (i < 0) return;
+    d.alumnos[i][campo] = valor;
+    // Si la opción elegida no lleva examen, el puntaje deja de aplicar.
+    if (campo === "ingresoOpcion" && !llevaExamen(d, valor)) d.alumnos[i].ingresoPuntaje = "";
+  });
+
+  const ingreso = useMemo(() => {
+    const filas = alumnos.map((a) => ({ a, ...datosIngreso(db, a) }));
+    const conOpcion = filas.filter((f) => f.opcion);
+    const conExamen = filas.filter((f) => f.examen && f.real !== null);
+    const simsComparables = conExamen.filter((f) => f.simulador !== null);
+    return {
+      filas,
+      porOpcion: (db.catalogos.opcionesIngreso || []).map((o) => ({ ...o, n2: filas.filter((f) => Number(f.opcion) === Number(o.n)).length })),
+      sinOpcion: filas.length - conOpcion.length,
+      conFolio: filas.filter((f) => f.folio).length,
+      asignados: filas.filter((f) => f.escuela).length,
+      promedioReal: conExamen.length ? round(conExamen.reduce((t, f) => t + f.real, 0) / conExamen.length, 1) : null,
+      promedioSim: simsComparables.length ? round(simsComparables.reduce((t, f) => t + f.simulador, 0) / simsComparables.length, 1) : null,
+      presentaron: conExamen.length,
+    };
+  }, [db, alumnos]);
+
+  const escuelasPrevias = useMemo(() =>
+    [...new Set(db.alumnos.map((a) => (a.ingresoEscuela || "").trim()).filter(Boolean))].sort(), [db]);
+
+  const pdfIngreso = () => {
+    const g2 = db.grupos.find((x) => x.id === grupoId);
+    pdfTabla({
+      titulo: "Proceso de ingreso a media superior",
+      subtitulo: [g2 ? `${g2.grado}° ${g2.grupo}` : "", db.config.docente].filter(Boolean).join("   ·   "),
+      columnas: ["No.", "Nombre", "Opción", "Folio", "Puntaje", "Simulador", "Dif.", "Escuela asignada"],
+      filas: ingreso.filas.map((f) => [
+        f.a.numLista, nomComp(f.a),
+        f.opcion ? `${f.opcion} · ${opcionIngreso(db, f.opcion)?.nombre || ""}` : "—",
+        f.folio || "—",
+        f.real === null ? (f.examen ? "Pendiente" : "No aplica") : `${f.real}/${f.maxTotal}`,
+        f.simulador === null ? "—" : `${f.simulador}/${f.maxTotal}`,
+        f.diferencia === null ? "—" : (f.diferencia > 0 ? "+" : "") + f.diferencia,
+        f.escuela || "—",
+      ]),
+      config: db.config, ciclo: db.ciclo,
+      resumen: [
+        { label: "Estudiantes", valor: ingreso.filas.length },
+        { label: "Con folio", valor: ingreso.conFolio },
+        { label: "Presentaron examen", valor: ingreso.presentaron },
+        { label: "Ya asignados", valor: ingreso.asignados },
+      ],
+      nota: "Registro de seguimiento del proceso de ingreso a educación media superior. Los datos provienen de la documentación entregada por cada estudiante.",
+    });
+    toast("PDF descargado");
+  };
+
   const exportarConcentrado = () => {
     const g = db.grupos.find((x) => x.id === grupoId);
     exportarExcel(`ecoems_${g ? g.grado + g.grupo : ""}`,
@@ -1760,7 +1894,7 @@ function Ecoems({ db, upd, ir, toast }) {
         <Sel value={grupoId} onChange={(e) => setGrupoId(e.target.value)} className="max-w-[170px]">{db.grupos.map((g) => <option key={g.id} value={g.id}>{g.grado}° {g.grupo}</option>)}</Sel>
         {maxTotal !== 128 && <span className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1">Las áreas suman {maxTotal} aciertos. Ajusta el catálogo en Configuración si esperabas 128.</span>}
       </div>
-      <Tabs activa={tab} set={setTab} tabs={[{ id: "captura", label: "Captura" }, { id: "concentrado", label: "Concentrado" }, { id: "analisis", label: "Análisis" }, { id: "comparativo", label: "Comparativo" }]} />
+      <Tabs activa={tab} set={setTab} tabs={[{ id: "captura", label: "Captura" }, { id: "concentrado", label: "Concentrado" }, { id: "analisis", label: "Análisis" }, { id: "comparativo", label: "Comparativo" }, { id: "ingreso", label: "Proceso de ingreso" }]} />
 
       {tab === "captura" && (
         <Card>
@@ -1895,6 +2029,140 @@ function Ecoems({ db, upd, ir, toast }) {
           </Card>
         </div>
       ) : <Card><Vacio texto="Registra al menos una aplicación para ver el análisis." /></Card>)}
+
+      {tab === "ingreso" && (() => {
+        const g2 = db.grupos.find((x) => x.id === grupoId);
+        const esTercero = g2 && Number(g2.grado) === 3;
+        return (
+          <div className="space-y-4">
+            {!esTercero && (
+              <Card className="border-amber-300 bg-amber-50">
+                <p className="text-sm text-amber-900">Este seguimiento es para tercer año. El grupo seleccionado es de {g2 ? `${g2.grado}°` : "otro grado"}, así que puedes capturar, pero normalmente no aplica.</p>
+              </Card>
+            )}
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <Stat label="Con folio" valor={`${ingreso.conFolio}/${ingreso.filas.length}`} />
+              <Stat label="Presentaron examen" valor={ingreso.presentaron} />
+              <Stat label="Ya asignados" valor={ingreso.asignados} color="text-emerald-700" />
+              <Stat label="Sin opción elegida" valor={ingreso.sinOpcion} color={ingreso.sinOpcion ? "text-amber-700" : "text-slate-900"} />
+            </div>
+
+            <Card>
+              <p className="text-sm font-semibold text-slate-800 mb-3">Cómo se repartió el grupo</p>
+              <div className="space-y-1.5">
+                {ingreso.porOpcion.map((o) => (
+                  <div key={o.n} className="flex items-center gap-3">
+                    <span className="cifras w-6 h-6 rounded-md bg-slate-800 text-white text-xs font-bold flex items-center justify-center shrink-0">{o.n}</span>
+                    <span className="grow text-sm text-slate-800">{o.nombre}</span>
+                    <span className="cifras text-sm font-bold text-slate-900">{o.n2}</span>
+                  </div>
+                ))}
+                {ingreso.sinOpcion > 0 && (
+                  <div className="flex items-center gap-3 pt-1.5 border-t border-slate-200">
+                    <span className="w-6 h-6 rounded-md bg-slate-200 text-slate-600 text-xs font-bold flex items-center justify-center shrink-0">—</span>
+                    <span className="grow text-sm text-slate-500">Sin elegir todavía</span>
+                    <span className="cifras text-sm font-bold text-slate-600">{ingreso.sinOpcion}</span>
+                  </div>
+                )}
+              </div>
+            </Card>
+
+            {ingreso.promedioReal !== null && (
+              <Card>
+                <p className="text-sm font-semibold text-slate-800 mb-1">Qué tanto acertó tu simulador</p>
+                <p className="text-xs text-slate-500 mb-3">Promedio de quienes ya presentaron examen, contra lo que sacaron en su último simulador.</p>
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg py-3">
+                    <p className="cifras text-2xl font-bold text-amber-800">{ingreso.promedioSim ?? "—"}</p>
+                    <p className="text-[11px] text-slate-600 mt-0.5">Simulador</p>
+                  </div>
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg py-3">
+                    <p className="cifras text-2xl font-bold text-emerald-800">{ingreso.promedioReal}</p>
+                    <p className="text-[11px] text-slate-600 mt-0.5">Examen real</p>
+                  </div>
+                  <div className="bg-slate-100 border border-slate-300 rounded-lg py-3">
+                    <p className="cifras text-2xl font-bold text-slate-900">
+                      {ingreso.promedioSim === null ? "—" : (ingreso.promedioReal - ingreso.promedioSim > 0 ? "+" : "") + round(ingreso.promedioReal - ingreso.promedioSim, 1)}
+                    </p>
+                    <p className="text-[11px] text-slate-600 mt-0.5">Diferencia</p>
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            <div className="flex justify-end">
+              <Btn size="sm" tipo="secundario" icon={FileDown} onClick={pdfIngreso}>Descargar PDF</Btn>
+            </div>
+
+            <datalist id="escuelas-previas">
+              {escuelasPrevias.map((e) => <option key={e} value={e} />)}
+            </datalist>
+
+            {ingreso.filas.length === 0 ? <Card><Vacio texto="Este grupo no tiene estudiantes activos." /></Card> : (
+              <div className="space-y-2">
+                {ingreso.filas.map((f) => (
+                  <Card key={f.a.id}>
+                    <div className="flex items-baseline gap-2 mb-3">
+                      <span className="cifras text-xs font-semibold text-slate-500">{f.a.numLista}</span>
+                      <span className="grow text-sm font-semibold text-slate-900">{nomComp(f.a)}</span>
+                      {f.escuela && <Pill cls="bg-emerald-50 text-emerald-800 border-emerald-200">Asignado</Pill>}
+                    </div>
+
+                    <div className="mb-3">
+                      <span className="block text-xs font-medium text-slate-600 mb-1.5">Opción que presentará</span>
+                      <div className="flex gap-1.5">
+                        {(db.catalogos.opcionesIngreso || []).map((o) => (
+                          <button key={o.n} type="button" onClick={() => setIngreso(f.a.id, "ingresoOpcion", Number(f.opcion) === Number(o.n) ? "" : o.n)}
+                            title={o.nombre}
+                            className={`grow rounded-lg border-2 px-2 py-2 text-left transition-colors ${Number(f.opcion) === Number(o.n) ? "bg-slate-800 text-white border-slate-800" : "bg-white text-slate-700 border-slate-300 hover:border-slate-500"}`}>
+                            <span className="cifras block text-base font-bold leading-none">{o.n}</span>
+                            <span className="block text-[10px] leading-tight mt-1 opacity-90">{o.nombre}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="grid sm:grid-cols-2 gap-3">
+                      <Campo label="Folio">
+                        <Inp value={f.folio} onChange={(e) => setIngreso(f.a.id, "ingresoFolio", e.target.value)} placeholder="Número de registro" />
+                      </Campo>
+                      <Campo label={f.examen ? `Puntaje obtenido (de ${f.maxTotal})` : "Puntaje"}
+                        hint={f.examen ? "" : "Esta opción no lleva examen de admisión."}>
+                        <Inp type="number" min="0" max={f.maxTotal} disabled={!f.examen}
+                          value={f.real === null ? "" : f.real}
+                          onChange={(e) => setIngreso(f.a.id, "ingresoPuntaje", e.target.value === "" ? "" : Math.min(f.maxTotal, Math.max(0, Number(e.target.value))))}
+                          className={f.examen ? "" : "bg-slate-100 text-slate-400 cursor-not-allowed"} />
+                      </Campo>
+                    </div>
+
+                    {f.examen && f.real !== null && (
+                      <div className="flex items-center gap-3 mt-2 flex-wrap text-xs">
+                        <span className="cifras text-slate-600">Simulador {f.simuladorNum ?? "—"}: <strong className="text-slate-900">{f.simulador ?? "—"}</strong></span>
+                        <span className="cifras text-slate-600">Examen: <strong className="text-slate-900">{f.real}</strong></span>
+                        {f.diferencia !== null && (
+                          <span className={`cifras rounded-md px-2 py-0.5 font-semibold ${f.diferencia >= 0 ? "bg-emerald-700 text-white" : "bg-amber-600 text-white"}`}>
+                            {f.diferencia > 0 ? "+" : ""}{f.diferencia} aciertos
+                          </span>
+                        )}
+                        <span className="cifras text-slate-600">{f.porcentaje}%</span>
+                      </div>
+                    )}
+
+                    <div className="mt-3">
+                      <Campo label="Escuela asignada" hint="Se llena cuando salgan los resultados.">
+                        <Inp list="escuelas-previas" value={f.escuela} onChange={(e) => setIngreso(f.a.id, "ingresoEscuela", e.target.value)} placeholder="Plantel donde quedó" />
+                      </Campo>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            )}
+
+            <Aviso>Los nombres de las tres opciones se editan en Configuración, por si cambia la convocatoria.</Aviso>
+          </div>
+        );
+      })()}
 
       {tab === "comparativo" && (
         <div className="space-y-4">
@@ -2748,6 +3016,16 @@ function Reportes({ db, toast }) {
       });
       return { titulo: "Reporte por materia", cols: ["Materia", "Actividad", "Trim.", "Entrega", "Entregadas", "Fuera de tiempo", "No entregadas", "Promedio"], filas };
     }
+    if (tipo === "ingreso") {
+      const filas = alumnos.map((a) => { const ing = datosIngreso(db, a); const opc = opcionIngreso(db, ing.opcion);
+        return [a.numLista, nomComp(a), opc ? `${opc.n} · ${opc.nombre}` : "Sin elegir", ing.folio || "—",
+          ing.real === null ? (ing.examen ? "Pendiente" : "No aplica") : `${ing.real}/${ing.maxTotal}`,
+          ing.simulador === null ? "—" : `${ing.simulador}/${ing.maxTotal}`,
+          ing.diferencia === null ? "—" : `${ing.diferencia > 0 ? "+" : ""}${ing.diferencia}`,
+          ing.escuela || "—"]; });
+      return { titulo: "Proceso de ingreso a media superior",
+        cols: ["No.", "Nombre", "Opción", "Folio", "Puntaje", "Simulador", "Dif.", "Escuela asignada"], filas };
+    }
     if (tipo === "comparativoEcoems") {
       const mats = db.catalogos.materiasEcoems;
       const nums = [...new Set(db.ecoems.filter((s2) => s2.grupoId === grupoId).map((s2) => s2.numero))].sort((a, b) => a - b);
@@ -2803,6 +3081,13 @@ function Reportes({ db, toast }) {
         { label: "En seguimiento", valor: ii.filter((x) => x.estado === "En seguimiento").length },
         { label: "Cerradas", valor: ii.filter((x) => x.estado === "Cerrada").length }];
     }
+    if (tipo === "ingreso") {
+      const ds = alumnos.map((a) => datosIngreso(db, a));
+      return [{ label: "Estudiantes", valor: ds.length },
+        { label: "Con folio", valor: ds.filter((x) => x.folio).length },
+        { label: "Presentaron examen", valor: ds.filter((x) => x.real !== null).length },
+        { label: "Ya asignados", valor: ds.filter((x) => x.escuela).length }];
+    }
     if (tipo === "ecoems" || tipo === "comparativoEcoems") {
       const mats = db.catalogos.materiasEcoems;
       const maxTotal = mats.reduce((t, m) => t + Number(m.reactivos || 0), 0);
@@ -2837,6 +3122,7 @@ function Reportes({ db, toast }) {
               <option value="materia">Por materia</option><option value="permisos">Permisos</option>
               <option value="incidencias">Incidencias</option><option value="convivencia">Convivencia escolar</option><option value="seguimiento">Seguimiento</option>
               <option value="ecoems">ECOEMS</option><option value="comparativoEcoems">Comparativo ECOEMS</option>
+              <option value="ingreso">Proceso de ingreso</option>
               <option value="bitacora">Bitácora</option><option value="integral">Integral del grupo</option>
             </Sel>
           </Campo>
@@ -3121,6 +3407,22 @@ function Configuracion({ db, upd, meta, setCiclo, nuevoCiclo, restaurar, toast, 
             </div>
           </Card>
           <Card>
+            <p className="text-sm font-medium text-slate-700 mb-2">Opciones de ingreso a media superior</p>
+            <p className="text-xs text-slate-500 mb-3">Cámbiales el nombre cuando cambie la convocatoria. Marca si la opción lleva examen: con eso la app sabe a quién pedirle puntaje.</p>
+            <div className="space-y-2">
+              {(cat.opcionesIngreso || []).map((o, i) => (
+                <div key={o.n} className="flex gap-2 items-center">
+                  <span className="cifras w-7 h-9 shrink-0 rounded-md bg-slate-800 text-white text-sm font-bold flex items-center justify-center">{o.n}</span>
+                  <input value={o.nombre} onChange={(e) => setLista("opcionesIngreso", i, { ...o, nombre: e.target.value })} className={inputCls} />
+                  <label className="flex items-center gap-1.5 text-xs text-slate-700 shrink-0 cursor-pointer">
+                    <input type="checkbox" checked={!!o.examen} onChange={(e) => setLista("opcionesIngreso", i, { ...o, examen: e.target.checked })} />
+                    Examen
+                  </label>
+                </div>
+              ))}
+            </div>
+          </Card>
+          <Card>
             <p className="text-sm font-medium text-slate-700 mb-2">Catálogo de conductas · Marco para la Convivencia Escolar</p>
             <p className="text-xs text-slate-500 mb-3">Actualízalo cuando cambie la normativa aplicable en tu entidad.</p>
             <div className="space-y-2">
@@ -3318,7 +3620,7 @@ function Buscador({ db, ir, cerrar }) {
   const res = useMemo(() => {
     if (q.trim().length < 2) return [];
     const n = norm(q); const r = [];
-    db.alumnos.filter((a) => norm(`${nomComp(a)} ${a.curp || ""} ${a.numLista}`).includes(n)).slice(0, 8).forEach((a) => { const g = db.grupos.find((x) => x.id === a.grupoId); r.push({ tipo: "Alumno", texto: nomComp(a), sub: [g ? `${g.grado}° ${g.grupo}` : "", `No. ${a.numLista}`, a.curp].filter(Boolean).join(" · "), ir: () => ir("ficha", { alumnoId: a.id }) }); });
+    db.alumnos.filter((a) => norm(`${nomComp(a)} ${a.curp || ""} ${a.numLista} ${a.ingresoFolio || ""} ${a.ingresoEscuela || ""}`).includes(n)).slice(0, 8).forEach((a) => { const g = db.grupos.find((x) => x.id === a.grupoId); r.push({ tipo: "Alumno", texto: nomComp(a), sub: [g ? `${g.grado}° ${g.grupo}` : "", `No. ${a.numLista}`, a.curp].filter(Boolean).join(" · "), ir: () => ir("ficha", { alumnoId: a.id }) }); });
     db.grupos.filter((g) => norm(`${g.grado} ${g.grupo} ${g.asignatura}`).includes(n)).forEach((g) => r.push({ tipo: "Grupo", texto: `${g.grado}° ${g.grupo}`, sub: g.asignatura, ir: () => ir("tableroGrupo", { grupoId: g.id }) }));
     db.actividades.filter((a) => norm(`${a.nombre} ${a.materia || ""}`).includes(n)).slice(0, 6).forEach((a) => r.push({ tipo: "Actividad", texto: a.nombre, sub: `${a.materia ? a.materia + " · " : ""}Entrega ${fFecha(a.fechaEntrega)}`, ir: () => ir("actividades") }));
     db.incidencias.filter((i) => norm(`${i.folio} ${i.descripcion} ${i.conducta || i.tipo} ${i.gravedad || ""}`).includes(n)).slice(0, 6).forEach((i) => r.push({ tipo: "Incidencia", texto: i.folio, sub: `${i.conducta || i.tipo} · ${i.gravedad || ""}`, ir: () => ir("incidencias", { incId: i.id }) }));
@@ -3385,6 +3687,29 @@ class Salvavidas extends React.Component {
 /* ============================================================
    APLICACIÓN
    ============================================================ */
+/* Cada módulo pertenece a un dominio y lleva su color en la banda
+   superior. Así sabes dónde estás sin leer el título. */
+const DOMINIO = {
+  inicio:        { nombre: "Inicio",      banda: "bg-emerald-800", texto: "text-emerald-100", punto: "bg-emerald-600" },
+  grupos:        { nombre: "Grupos",      banda: "bg-emerald-800", texto: "text-emerald-100", punto: "bg-emerald-600" },
+  alumnos:       { nombre: "Alumnos",     banda: "bg-emerald-800", texto: "text-emerald-100", punto: "bg-emerald-600" },
+  ficha:         { nombre: "Alumnos",     banda: "bg-emerald-800", texto: "text-emerald-100", punto: "bg-emerald-600" },
+  tableroGrupo:  { nombre: "Grupos",      banda: "bg-emerald-800", texto: "text-emerald-100", punto: "bg-emerald-600" },
+  asistencia:    { nombre: "Asistencia",  banda: "bg-emerald-700", texto: "text-emerald-100", punto: "bg-emerald-500" },
+  permisos:      { nombre: "Permisos",    banda: "bg-violet-700",  texto: "text-violet-100",  punto: "bg-violet-500" },
+  actividades:   { nombre: "Académico",   banda: "bg-sky-700",     texto: "text-sky-100",     punto: "bg-sky-500" },
+  evaluacion:    { nombre: "Académico",   banda: "bg-sky-700",     texto: "text-sky-100",     punto: "bg-sky-500" },
+  ecoems:        { nombre: "ECOEMS",      banda: "bg-amber-700",   texto: "text-amber-100",   punto: "bg-amber-500" },
+  incidencias:   { nombre: "Convivencia", banda: "bg-rose-700",    texto: "text-rose-100",    punto: "bg-rose-500" },
+  valoracion:    { nombre: "Convivencia", banda: "bg-rose-700",    texto: "text-rose-100",    punto: "bg-rose-500" },
+  bitacora:      { nombre: "Bitácora",    banda: "bg-slate-800",   texto: "text-slate-200",   punto: "bg-slate-500" },
+  estadisticas:  { nombre: "Estadísticas",banda: "bg-slate-800",   texto: "text-slate-200",   punto: "bg-slate-500" },
+  reportes:      { nombre: "Reportes",    banda: "bg-slate-800",   texto: "text-slate-200",   punto: "bg-slate-500" },
+  calendario:    { nombre: "Calendario",  banda: "bg-slate-800",   texto: "text-slate-200",   punto: "bg-slate-500" },
+  configuracion: { nombre: "Ajustes",     banda: "bg-slate-800",   texto: "text-slate-200",   punto: "bg-slate-500" },
+};
+const dominioDe = (v) => DOMINIO[v] || DOMINIO.inicio;
+
 const MENU = [
   { id: "inicio", label: "Inicio", icon: Home },
   { id: "grupos", label: "Grupos", icon: Users },
@@ -3512,6 +3837,7 @@ export default function App() {
     </div>
   );
 
+  const dom = dominioDe(vista);
   const props = { db, upd, ir, toast, params };
   const pantallas = {
     inicio: <Inicio db={db} ir={ir} />,
@@ -3536,23 +3862,21 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900" style={{ fontFamily: "ui-sans-serif, system-ui, -apple-system, sans-serif" }}>
       {/* Barra superior */}
-      <header className="sticky top-0 z-30 bg-white border-b border-slate-200">
+      <header className={`sticky top-0 z-30 ${dom.banda}`}>
         <div className="flex items-center gap-2 px-3 sm:px-5 h-14">
-          <button onClick={() => setMenuAbierto(!menuAbierto)} className="lg:hidden p-2 rounded-lg hover:bg-slate-100 text-slate-600"><Menu size={20} /></button>
+          <button onClick={() => setMenuAbierto(!menuAbierto)} className={`lg:hidden p-2 rounded-lg hover:bg-white/15 text-white`}><Menu size={20} /></button>
           <div className="grow min-w-0">
-            <p className="font-semibold text-slate-900 leading-tight truncate">Control Docente Integral</p>
-            <p className="text-[11px] text-slate-400 truncate">{db.config.escuela || "Configura tu escuela"} · Ciclo {db.ciclo}</p>
+            <p className="font-semibold text-white leading-tight truncate">{dom.nombre}</p>
+            <p className={`text-[11px] ${dom.texto} truncate`}>{db.config.escuela || "Configura tu escuela"} · Ciclo {db.ciclo}</p>
           </div>
           {!enLinea && (
-            <span title="La app funciona sin internet" className="inline-flex items-center gap-1 text-[11px] text-slate-500 bg-slate-100 border border-slate-200 rounded-md px-1.5 py-1">
+            <span title="La app funciona sin internet" className="inline-flex items-center gap-1 text-[11px] text-white bg-white/20 rounded-md px-1.5 py-1">
               <WifiOff size={12} />
               <span className="hidden sm:inline">Sin conexión</span>
             </span>
           )}
-          <span className={`text-[11px] hidden sm:inline ${guardando ? "text-slate-400" : "text-emerald-600"}`}>
-            {guardando ? "Guardando…" : "Guardado"}
-          </span>
-          <button onClick={() => setBuscar(true)} className="p-2 rounded-lg hover:bg-slate-100 text-slate-600"><Search size={19} /></button>
+          <span className={`text-[11px] hidden sm:inline ${dom.texto}`}>{guardando ? "Guardando…" : "Guardado"}</span>
+          <button onClick={() => setBuscar(true)} aria-label="Buscar" className="p-2 rounded-lg hover:bg-white/15 text-white"><Search size={19} /></button>
         </div>
       </header>
 
@@ -3566,8 +3890,9 @@ export default function App() {
           <nav className="p-2 space-y-0.5">
             {menuVisible.map((m) => (
               <button key={m.id} onClick={() => ir(m.id)}
-                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors ${vista === m.id || (vista === "ficha" && m.id === "alumnos") || (vista === "tableroGrupo" && m.id === "grupos") ? "bg-emerald-50 text-emerald-800 font-medium" : "text-slate-600 hover:bg-slate-50"}`}>
-                <m.icon size={17} className={vista === m.id ? "text-emerald-700" : "text-slate-400"} />{m.label}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors ${vista === m.id || (vista === "ficha" && m.id === "alumnos") || (vista === "tableroGrupo" && m.id === "grupos") ? "bg-slate-100 text-slate-900 font-semibold" : "text-slate-600 hover:bg-slate-50"}`}>
+                <span className={`w-1.5 h-5 rounded-full shrink-0 ${vista === m.id ? dominioDe(m.id).punto : "bg-transparent"}`} />
+                <m.icon size={17} className={vista === m.id ? "text-slate-800" : "text-slate-400"} />{m.label}
               </button>
             ))}
           </nav>
@@ -3585,8 +3910,8 @@ export default function App() {
         {MENU_MOVIL.filter((id) => menuVisible.some((x) => x.id === id)).map((id) => {
           const m = MENU.find((x) => x.id === id);
           return (
-            <button key={id} onClick={() => ir(id)} className={`grow flex flex-col items-center gap-0.5 py-2 ${vista === id ? "text-emerald-700" : "text-slate-400"}`}>
-              <m.icon size={19} /><span className="text-[10px]">{m.label}</span>
+            <button key={id} onClick={() => ir(id)} className={`grow flex flex-col items-center gap-0.5 py-2 border-t-2 ${vista === id ? "text-slate-900 border-current" : "text-slate-400 border-transparent"}`}>
+              <m.icon size={19} /><span className="text-[10px] font-medium">{m.label}</span>
             </button>
           );
         })}
