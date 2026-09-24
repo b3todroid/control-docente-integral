@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: #EDEAE0;
+  color: #0D1110;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior-y: none;
+}
+
+/* Los números se alinean en columna: calificaciones, porcentajes, aciertos. */
+table, .cifras, input[type="number"] { font-variant-numeric: tabular-nums; }
+
+/* En celular, evita que el teclado haga acercamiento al escribir. */
+input, select, textarea { font-size: 16px; }
+@media (min-width: 640px) { input, select, textarea { font-size: 14px; } }
+
+/* El foco se ve, para quien navega con teclado. */
+:focus-visible { outline: 2px solid #0B4A2C; outline-offset: 2px; }
+
+/* Respeta a quien prefiere menos movimiento. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+/* Área segura en teléfonos con muesca. */
+@supports (padding: max(0px)) {
+  .pb-safe { padding-bottom: max(0.5rem, env(safe-area-inset-bottom)); }
+}
+
+@media print { .no-imprimir { display: none !important; } }
