@@ -45,6 +45,7 @@ const EST_ALUMNO = ["Activo", "Baja", "Traslado"];
 const CALIFS = [5, 6, 7, 8, 9, 10];        // escala de la boleta
 const MAX_MATERIAS_BOLETA = 11;
 const MAX_CLASES = 99;            // clases por trimestre; con clase diaria son unas 60
+const MAX_CRITERIOS = 8;          // criterios de una rúbrica
 const MATERIAS_SUGERIDAS = {
   1: ["Español", "Matemáticas", "Biología", "Historia", "Geografía", "Formación Cívica y Ética", "Inglés", "Artes", "Educación Física", "Tecnología", "Tutoría"],
   2: ["Español", "Matemáticas", "Física", "Historia", "Formación Cívica y Ética", "Inglés", "Artes", "Educación Física", "Tecnología", "Tutoría"],
@@ -72,9 +73,9 @@ const MEDIDAS_ATENCION = [
 
 const PERFILES = {
   Administrador: { modulos: null, desc: "Acceso completo al sistema" },
-  Docente: { modulos: ["inicio", "grupos", "alumnos", "asistencia", "permisos", "actividades", "evaluacion", "ecoems", "incidencias", "valoracion", "bitacora", "estadisticas", "reportes", "calendario", "configuracion"], desc: "Sus grupos, evaluación, asistencia, actividades, bitácora e incidencias" },
-  "Tutor de grupo": { modulos: ["inicio", "grupos", "alumnos", "asistencia", "evaluacion", "ecoems", "incidencias", "estadisticas", "reportes", "calendario"], desc: "Seguimiento integral de su grupo" },
-  "Orientación y prefectura": { modulos: ["inicio", "alumnos", "asistencia", "incidencias", "valoracion", "estadisticas", "reportes", "calendario"], desc: "Incidencias y seguimiento de convivencia" },
+  Docente: { modulos: null, desc: "Todo lo de sus grupos" },
+  "Tutor de grupo": { modulos: ["inicio", "grupos", "alumnos", "asistencia", "evaluacion", "ecoems", "incidencias", "reportes"], desc: "Seguimiento integral de su grupo" },
+  "Orientación y prefectura": { modulos: ["inicio", "alumnos", "asistencia", "incidencias", "reportes"], desc: "Convivencia y seguimiento" },
 };
 
 const semaforoDe = (porcentaje, cfg) => {
@@ -464,6 +465,42 @@ const Tabla = ({ cols, children }) => (
   </div>
 );
 
+/* Copiar a otros grupos: se escribe una vez y se replica.
+   Un maestro suele dar la misma materia a varios grupos. */
+const CopiarAGrupos = ({ db, grupoOrigen, seleccion, setSeleccion }) => {
+  const otros = db.grupos.filter((g) => g.id !== grupoOrigen && g.activo);
+  if (!otros.length) return <Aviso>Solo tienes un grupo activo, así que no hay a dónde copiar.</Aviso>;
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+        <span className="text-xs font-medium text-slate-600">Copiar también a estos grupos</span>
+        <button type="button" onClick={() => setSeleccion(seleccion.length === otros.length ? [] : otros.map((g) => g.id))}
+          className="text-xs text-slate-700 underline">
+          {seleccion.length === otros.length ? "Ninguno" : "Todos"}
+        </button>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {otros.map((g) => {
+          const puesto = seleccion.includes(g.id);
+          return (
+            <button key={g.id} type="button"
+              onClick={() => setSeleccion(puesto ? seleccion.filter((x) => x !== g.id) : [...seleccion, g.id])}
+              className={`px-3 py-2 rounded-lg border-2 text-sm font-medium transition-colors ${
+                puesto ? "bg-slate-800 text-white border-slate-800" : "bg-white text-slate-700 border-slate-300 hover:border-slate-500"}`}>
+              {g.grado}° {g.grupo}
+            </button>
+          );
+        })}
+      </div>
+      {seleccion.length > 0 && (
+        <p className="text-xs text-slate-600 mt-2">
+          Se crearán {seleccion.length + 1} copias en total, una por grupo. Después puedes editar cada una por separado.
+        </p>
+      )}
+    </div>
+  );
+};
+
 /* Selector de calificación: se toca, no se teclea. */
 const SelectorCalif = ({ valor, onChange, compacto = false }) => (
   <div className={`flex ${compacto ? "gap-0.5" : "gap-1"}`}>
@@ -565,6 +602,20 @@ function historialEcoems(db, alumnoId) {
   const ini = items[0]?.porcentaje || 0;
   const act = items[items.length - 1]?.porcentaje || 0;
   return { items, inicial: ini, actual: act, diferencia: round(act - ini, 1), avance: ini > 0 ? round(((act - ini) / ini) * 100, 1) : 0 };
+}
+
+/* Rúbrica: criterios con su valor. La calificación sale de lo palomeado. */
+function criteriosDe(act) {
+  return Array.isArray(act?.criterios) ? act.criterios : [];
+}
+function califDesdeRubrica(act, entrega) {
+  const cs = criteriosDe(act);
+  if (!cs.length) return null;
+  const logrados = cs.filter((c) => entrega?.rubrica?.[c.id]);
+  const total = cs.reduce((t, c) => t + (Number(c.valor) || 0), 0);
+  const suma = logrados.reduce((t, c) => t + (Number(c.valor) || 0), 0);
+  if (total <= 0) return null;
+  return round((suma / total) * (Number(act.valor) || 10), 1);
 }
 
 /* Participaciones acumuladas de un alumno, por trimestre o todo el ciclo. */
@@ -1066,6 +1117,24 @@ function Alumnos({ db, upd, ir, toast, params }) {
      ...lista.map((a) => { const g = db.grupos.find((x) => x.id === a.grupoId);
        return [a.numLista, a.apellidos, a.nombre, a.curp || "", g ? `${g.grado}° ${g.grupo}` : "", a.turno || "", a.tutorGrupo || "", a.tutorNombre || "", a.tutorTelefono || "", a.estatus || (a.activo ? "Activo" : "Baja")]; })]);
 
+  /* Lista en blanco: la que se imprime para pasar firmas o llevar control a mano. */
+  const [listaBlanco, setListaBlanco] = useState(null);
+  const columnasPosibles = ["Firma", "Asistencia", "Entregó", "Calificación", "Observaciones", "Material", "Pagó", "Justificante"];
+
+  const imprimirListaBlanco = () => {
+    const cols = listaBlanco.columnas.length ? listaBlanco.columnas : ["Firma"];
+    pdfTabla({
+      titulo: listaBlanco.titulo || "Lista del grupo",
+      subtitulo: [grupo ? `${grupo.grado}° ${grupo.grupo}` : "", db.config.docente, listaBlanco.nota].filter(Boolean).join("   ·   "),
+      columnas: ["No.", "Nombre", ...cols],
+      filas: lista.map((a) => [a.numLista, nomComp(a), ...cols.map(() => "     ")]),
+      config: membrete(db, grupoId), ciclo: db.ciclo,
+      nota: "Documento con datos de menores de edad. Su manejo es confidencial y de uso exclusivamente escolar.",
+    });
+    setListaBlanco(null);
+    toast("Lista descargada");
+  };
+
   const pdfPadron = () => {
     pdfTabla({
       titulo: "Padrón de alumnas y alumnos",
@@ -1085,6 +1154,7 @@ function Alumnos({ db, upd, ir, toast, params }) {
       <Titulo sub="Cada estudiante se registra una sola vez y su información se usa en todos los módulos."
         right={<div className="flex gap-2 flex-wrap">
           <Btn tipo="secundario" size="sm" icon={Upload} onClick={() => fileRef.current?.click()} disabled={!grupoId}>Importar</Btn>
+          <Btn tipo="secundario" size="sm" icon={ClipboardCheck} onClick={() => setListaBlanco({ titulo: "Lista del grupo", nota: "", columnas: ["Firma"] })} disabled={!grupoId}>Lista en blanco</Btn>
           <Btn tipo="secundario" size="sm" icon={FileDown} onClick={pdfPadron}>PDF</Btn>
           <Btn tipo="secundario" size="sm" icon={Download} onClick={exportar}>Excel</Btn>
           <Btn size="sm" icon={Plus} onClick={() => setModal({ numLista: "", apellidos: "", nombre: "", grupoId, curp: "", turno: db.config.turno || "Matutino", tutorGrupo: db.config.docente || "", tutorNombre: "", tutorTelefono: "", tutorCorreo: "", estatus: "Activo", activo: true, observaciones: "" })} disabled={!db.grupos.length}>Nuevo</Btn>
@@ -1181,6 +1251,35 @@ function Alumnos({ db, upd, ir, toast, params }) {
           </div>
         )}
       </Modal>
+      <Modal open={!!listaBlanco} onClose={() => setListaBlanco(null)} title="Lista en blanco para imprimir" ancho="max-w-lg"
+        footer={<><Btn tipo="secundario" onClick={() => setListaBlanco(null)}>Cancelar</Btn><Btn icon={FileDown} onClick={imprimirListaBlanco}>Descargar</Btn></>}>
+        {listaBlanco && (
+          <div className="space-y-3">
+            <Aviso>Sale la lista del grupo con los nombres y las columnas vacías que elijas, para llenarla a mano.</Aviso>
+            <Campo label="Título"><Inp value={listaBlanco.titulo} onChange={(e) => setListaBlanco({ ...listaBlanco, titulo: e.target.value })} /></Campo>
+            <Campo label="Nota bajo el título" hint="Por ejemplo: entrega de boletas, salida al museo, control de material.">
+              <Inp value={listaBlanco.nota} onChange={(e) => setListaBlanco({ ...listaBlanco, nota: e.target.value })} /></Campo>
+            <div>
+              <span className="block text-xs font-medium text-slate-600 mb-1.5">Columnas en blanco</span>
+              <div className="flex flex-wrap gap-1.5">
+                {columnasPosibles.map((c) => {
+                  const puesta = listaBlanco.columnas.includes(c);
+                  return (
+                    <button key={c} type="button"
+                      onClick={() => setListaBlanco({ ...listaBlanco, columnas: puesta ? listaBlanco.columnas.filter((x) => x !== c) : [...listaBlanco.columnas, c] })}
+                      className={`px-3 py-2 rounded-lg border-2 text-sm transition-colors ${
+                        puesta ? "bg-slate-800 text-white border-slate-800" : "bg-white text-slate-700 border-slate-300 hover:border-slate-500"}`}>
+                      {c}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-slate-500 mt-2">{lista.length} estudiantes · {listaBlanco.columnas.length || 1} columna(s)</p>
+            </div>
+          </div>
+        )}
+      </Modal>
+
       <Confirmar open={!!conf} texto={conf?.texto} textoSi={conf?.textoSi} onSi={conf?.onSi} onNo={() => setConf(null)} />
     </div>
   );
@@ -1907,20 +2006,27 @@ function Actividades({ db, upd, toast }) {
   const [modal, setModal] = useState(null);
   const [calif, setCalif] = useState(null);
   const [conf, setConf] = useState(null);
+  const [copiarA, setCopiarA] = useState([]);
   const lista = db.actividades.filter((a) => a.grupoId === grupoId && Number(a.trimestre) === Number(trim));
-  const vacio = { grupoId, nombre: "", fecha: hoy(), fechaEntrega: hoy(), trimestre: trim, instrumentoId: db.catalogos.instrumentos[0]?.id || "", materia: db.config.asignatura || "", evidencia: "", campoFormativo: "", contenido: "", pda: "", eje: "", proyecto: "", proposito: "", descripcion: "", producto: "", valor: 10 };
+  const vacio = { grupoId, nombre: "", fecha: hoy(), fechaEntrega: hoy(), trimestre: trim, instrumentoId: db.catalogos.instrumentos[0]?.id || "", materia: db.config.asignatura || "", evidencia: "", campoFormativo: "", contenido: "", pda: "", eje: "", proyecto: "", proposito: "", descripcion: "", producto: "", valor: 10, criterios: [] };
 
   const guardar = () => {
     if (!modal.nombre) return toast("Escribe el nombre de la actividad", "error");
     upd((d) => {
       if (modal.id) { const i = d.actividades.findIndex((a) => a.id === modal.id); d.actividades[i] = { ...modal, trimestre: Number(modal.trimestre) }; }
       else {
-        const nueva = { ...modal, id: uid("act"), trimestre: Number(modal.trimestre) };
-        d.actividades.push(nueva);
-        d.alumnos.filter((a) => a.grupoId === nueva.grupoId && a.activo).forEach((a) => d.entregas.push({ id: uid("ent"), actividadId: nueva.id, alumnoId: a.id, estado: "Pendiente", calificacion: 0 }));
+        const destinos = [modal.grupoId, ...copiarA.filter((x) => x !== modal.grupoId)];
+        destinos.forEach((gid) => {
+          const nueva = { ...modal, id: uid("act"), grupoId: gid, trimestre: Number(modal.trimestre) };
+          d.actividades.push(nueva);
+          d.alumnos.filter((a) => a.grupoId === gid && a.activo).forEach((a) =>
+            d.entregas.push({ id: uid("ent"), actividadId: nueva.id, alumnoId: a.id, estado: "Pendiente", calificacion: 0 }));
+        });
       }
     });
-    setModal(null); toast("Actividad guardada");
+    const n = modal.id ? 0 : copiarA.filter((x) => x !== modal.grupoId).length;
+    setModal(null); setCopiarA([]);
+    toast(n ? `Actividad guardada en ${n + 1} grupos` : "Actividad guardada");
   };
 
   const setEnt = (actId, alumnoId, campo, valor) => upd((d) => {
@@ -1930,13 +2036,21 @@ function Actividades({ db, upd, toast }) {
     if (campo === "calificacion" && e.estado === "Pendiente") e.estado = "Entregada";
   });
 
+  const marcarCriterio = (act, alumnoId, criterioId, valor) => upd((d) => {
+    let e = d.entregas.find((x) => x.actividadId === act.id && x.alumnoId === alumnoId);
+    if (!e) { e = { id: uid("ent"), actividadId: act.id, alumnoId, estado: "Pendiente", calificacion: 0 }; d.entregas.push(e); }
+    e.rubrica = { ...(e.rubrica || {}), [criterioId]: valor };
+    const cal = califDesdeRubrica(act, e);
+    if (cal !== null) { e.calificacion = cal; if (e.estado === "Pendiente") e.estado = "Entregada"; }
+  });
+
   const actCalif = db.actividades.find((a) => a.id === calif);
   const alumnosCalif = actCalif ? sortAl(db.alumnos.filter((a) => a.grupoId === actCalif.grupoId && a.activo)) : [];
 
   return (
     <div className="space-y-4">
       <Titulo sub="Planeación, seguimiento de entregas y calificación en un mismo lugar."
-        right={<Btn icon={Plus} onClick={() => setModal({ ...vacio, grupoId, trimestre: trim })} disabled={!db.grupos.length}>Nueva actividad</Btn>}>Actividades</Titulo>
+        right={<Btn icon={Plus} onClick={() => { setModal({ ...vacio, grupoId, trimestre: trim }); setCopiarA([]); }} disabled={!db.grupos.length}>Nueva actividad</Btn>}>Actividades</Titulo>
       <div className="flex gap-2 flex-wrap">
         <Sel value={grupoId} onChange={(e) => setGrupoId(e.target.value)} className="max-w-[170px]">{db.grupos.map((g) => <option key={g.id} value={g.id}>{etiquetaGrupo(db, g)}</option>)}</Sel>
         <Sel value={trim} onChange={(e) => setTrim(Number(e.target.value))} className="max-w-[150px]">{[1, 2, 3].map((t) => <option key={t} value={t}>Trimestre {t}</option>)}</Sel>
@@ -1959,6 +2073,7 @@ function Actividades({ db, upd, toast }) {
                     <div className="flex items-center gap-2 flex-wrap">
                       <p className="font-medium text-slate-900">{a.nombre}</p>
                       <Pill cls="bg-slate-100 text-slate-600 border-slate-200">{ins?.nombre || "Sin instrumento"}</Pill>
+                      {criteriosDe(a).length > 0 && <Pill cls="bg-sky-50 text-sky-800 border-sky-200">{criteriosDe(a).length} criterios</Pill>}
                     </div>
                     <p className="text-xs text-slate-500 mt-0.5">{a.materia ? a.materia + " · " : ""}Entrega {fFecha(a.fechaEntrega)} · {a.campoFormativo || "Sin campo formativo"}</p>
                     <div className="flex gap-2 mt-2 text-[11px] flex-wrap">
@@ -2006,6 +2121,44 @@ function Actividades({ db, upd, toast }) {
             <Campo label="Producto esperado"><Inp value={modal.producto} onChange={(e) => setModal({ ...modal, producto: e.target.value })} /></Campo>
             <div className="sm:col-span-2"><Campo label="Propósito"><Area value={modal.proposito} onChange={(e) => setModal({ ...modal, proposito: e.target.value })} /></Campo></div>
             <div className="sm:col-span-2"><Campo label="Descripción"><Area value={modal.descripcion} onChange={(e) => setModal({ ...modal, descripcion: e.target.value })} /></Campo></div>
+            <div className="sm:col-span-2 border-t-2 border-slate-200 pt-3">
+              <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                <span className="text-xs font-medium text-slate-600">Criterios de evaluación (opcional)</span>
+                {criteriosDe(modal).length < MAX_CRITERIOS && (
+                  <Btn size="sm" tipo="secundario" icon={Plus}
+                    onClick={() => setModal({ ...modal, criterios: [...criteriosDe(modal), { id: uid("cri"), nombre: "", valor: 1 }] })}>
+                    Agregar criterio
+                  </Btn>
+                )}
+              </div>
+              {criteriosDe(modal).length === 0
+                ? <p className="text-xs text-slate-500">Sin criterios pones una sola calificación. Con criterios los vas palomeando por alumno y la calificación sale sola.</p>
+                : (
+                  <div className="space-y-2">
+                    {criteriosDe(modal).map((c, i) => (
+                      <div key={c.id} className="flex gap-2 items-center">
+                        <input value={c.nombre} placeholder="Qué se evalúa"
+                          onChange={(e) => { const cs = [...criteriosDe(modal)]; cs[i] = { ...c, nombre: e.target.value }; setModal({ ...modal, criterios: cs }); }}
+                          className={inputCls} />
+                        <input type="number" min="1" value={c.valor} title="Peso del criterio"
+                          onChange={(e) => { const cs = [...criteriosDe(modal)]; cs[i] = { ...c, valor: Number(e.target.value) || 1 }; setModal({ ...modal, criterios: cs }); }}
+                          className={inputCls + " w-20"} />
+                        <button onClick={() => setModal({ ...modal, criterios: criteriosDe(modal).filter((_, j) => j !== i) })}
+                          aria-label="Quitar criterio" className="p-2 text-rose-600 hover:bg-rose-50 rounded-lg"><Trash2 size={15} /></button>
+                      </div>
+                    ))}
+                    <p className="text-[11px] text-slate-500">
+                      El número es el peso de cada criterio. La calificación se reparte sobre {modal.valor} según lo que palomees.
+                    </p>
+                  </div>
+                )}
+            </div>
+
+            {!modal.id && (
+              <div className="sm:col-span-2 border-t-2 border-slate-200 pt-3">
+                <CopiarAGrupos db={db} grupoOrigen={modal.grupoId} seleccion={copiarA} setSeleccion={setCopiarA} />
+              </div>
+            )}
           </div>
         )}
       </Modal>
@@ -2016,17 +2169,48 @@ function Actividades({ db, upd, toast }) {
             <div className="flex gap-2 mb-3 flex-wrap">
               <Btn size="sm" tipo="secundario" onClick={() => alumnosCalif.forEach((a) => setEnt(actCalif.id, a.id, "estado", "Entregada"))}>Marcar todas como entregadas</Btn>
             </div>
-            <Tabla cols={["No.", "Nombre", "Estado", "Calificación"]}>
-              {alumnosCalif.map((a) => { const e = db.entregas.find((x) => x.actividadId === actCalif.id && x.alumnoId === a.id) || {};
-                return (
-                  <tr key={a.id}>
-                    <td className="py-2 px-3 text-slate-400">{a.numLista}</td>
-                    <td className="py-2 px-3">{nomComp(a)}</td>
-                    <td className="py-2 px-3"><select value={e.estado || "Pendiente"} onChange={(ev) => setEnt(actCalif.id, a.id, "estado", ev.target.value)} className="border border-slate-200 rounded px-2 py-1 text-xs">{EST_ACT.map((s) => <option key={s}>{s}</option>)}</select></td>
-                    <td className="py-2 px-3"><input type="number" step="0.1" min="0" max={actCalif.valor} value={e.calificacion ?? ""} onChange={(ev) => setEnt(actCalif.id, a.id, "calificacion", Number(ev.target.value))} className="w-20 border border-slate-200 rounded px-2 py-1 text-xs" /></td>
-                  </tr>
-                ); })}
-            </Tabla>
+            {criteriosDe(actCalif).length === 0 ? (
+              <Tabla cols={["No.", "Nombre", "Estado", "Calificación"]}>
+                {alumnosCalif.map((a) => { const e = db.entregas.find((x) => x.actividadId === actCalif.id && x.alumnoId === a.id) || {};
+                  return (
+                    <tr key={a.id}>
+                      <td className="py-2 px-3 text-slate-500">{a.numLista}</td>
+                      <td className="py-2 px-3">{nomComp(a)}</td>
+                      <td className="py-2 px-3"><select value={e.estado || "Pendiente"} onChange={(ev) => setEnt(actCalif.id, a.id, "estado", ev.target.value)} className="border border-slate-300 rounded px-2 py-1 text-xs">{EST_ACT.map((s) => <option key={s}>{s}</option>)}</select></td>
+                      <td className="py-2 px-3"><input type="number" step="0.1" min="0" max={actCalif.valor} value={e.calificacion ?? ""} onChange={(ev) => setEnt(actCalif.id, a.id, "calificacion", Number(ev.target.value))} className="w-20 border border-slate-300 rounded px-2 py-1 text-xs" /></td>
+                    </tr>
+                  ); })}
+              </Tabla>
+            ) : (
+              <div className="space-y-2">
+                <Aviso>Palomea lo que cada quien logró. La calificación se calcula sola y se guarda al instante.</Aviso>
+                {alumnosCalif.map((a) => {
+                  const e = db.entregas.find((x) => x.actividadId === actCalif.id && x.alumnoId === a.id) || {};
+                  const cal = califDesdeRubrica(actCalif, e);
+                  return (
+                    <div key={a.id} className="border border-slate-300 rounded-lg p-3">
+                      <div className="flex items-baseline gap-2 mb-2 flex-wrap">
+                        <span className="cifras text-xs font-semibold text-slate-500">{a.numLista}</span>
+                        <span className="grow text-sm font-semibold text-slate-900">{nomComp(a)}</span>
+                        <span className={`cifras text-lg font-bold ${cal === null ? "text-slate-400" : cal < 6 ? "text-rose-700" : "text-emerald-700"}`}>{cal ?? "—"}</span>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {criteriosDe(actCalif).map((c) => {
+                          const puesto = !!e.rubrica?.[c.id];
+                          return (
+                            <button key={c.id} type="button" onClick={() => marcarCriterio(actCalif, a.id, c.id, !puesto)}
+                              className={`px-2.5 py-1.5 rounded-lg border-2 text-xs text-left transition-colors ${
+                                puesto ? "bg-emerald-700 text-white border-emerald-700" : "bg-white text-slate-700 border-slate-300 hover:border-slate-500"}`}>
+                              {puesto && <Check size={11} className="inline mr-1" />}{c.nombre || "Sin nombre"}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </>
         )}
       </Modal>
@@ -2826,6 +3010,7 @@ function Ecoems({ db, upd, ir, toast }) {
    ============================================================ */
 function Incidencias({ db, upd, ir, toast, params }) {
   const [seccion, setSeccion] = useState(params?.seccion || "incidencias");
+  const [incValorar, setIncValorar] = useState(params?.incId || null);
   const [cita, setCita] = useState(params?.nuevaCitaPara
     ? { alumnoId: params.nuevaCitaPara, grupoId: params.grupoId || "", fecha: hoy(), hora: "08:00", lugar: "Dirección escolar",
         docente: "", motivo: MOTIVOS_CITA[0], detalle: "", estado: "Pendiente", atendio: "", acuerdos: "" }
@@ -2891,19 +3076,21 @@ function Incidencias({ db, upd, ir, toast, params }) {
 
   return (
     <div className="space-y-4">
-      <Titulo sub={seccion === "incidencias"
-        ? "Marco para la convivencia escolar. Registro de hechos objetivos, sin calificativos sobre las personas."
-        : "Citatorios a madres, padres o tutores, con seguimiento de quién asistió y qué se acordó."}>Convivencia</Titulo>
+      <Titulo sub={{
+        incidencias: "Marco para la convivencia escolar. Registro de hechos objetivos, sin calificativos sobre las personas.",
+        valoracion: "Registro administrativo vinculado al folio de cada incidencia.",
+        citatorios: "Citatorios a madres, padres o tutores, con seguimiento de quién asistió y qué se acordó.",
+      }[seccion]}>Convivencia</Titulo>
 
       <div className="flex gap-2 flex-wrap items-center">
-        <Tabs activa={seccion} set={setSeccion} tabs={[{ id: "incidencias", label: "Incidencias" }, { id: "citatorios", label: "Citatorios" }]} />
+        <Tabs activa={seccion} set={setSeccion} tabs={[{ id: "incidencias", label: "Incidencias" }, { id: "valoracion", label: "Valoración" }, { id: "citatorios", label: "Citatorios" }]} />
         <div className="grow" />
-        {seccion === "incidencias"
-          ? <Btn size="sm" icon={Plus} onClick={() => setModal(nuevo())} disabled={!db.alumnos.length}>Nueva incidencia</Btn>
-          : <Btn size="sm" icon={UserPlus} onClick={() => setCita(nuevaCita())} disabled={!db.alumnos.length}>Nuevo citatorio</Btn>}
+        {seccion === "incidencias" && <Btn size="sm" icon={Plus} onClick={() => setModal(nuevo())} disabled={!db.alumnos.length}>Nueva incidencia</Btn>}
+        {seccion === "citatorios" && <Btn size="sm" icon={UserPlus} onClick={() => setCita(nuevaCita())} disabled={!db.alumnos.length}>Nuevo citatorio</Btn>}
       </div>
 
       {seccion === "citatorios" && <Citatorios db={db} upd={upd} ir={ir} toast={toast} cita={cita} setCita={setCita} nuevaCita={nuevaCita} />}
+      {seccion === "valoracion" && <Valoracion db={db} upd={upd} ir={ir} toast={toast} params={{ incId: incValorar }} />}
 
       {seccion === "incidencias" && (<>
 
@@ -3020,7 +3207,7 @@ function Incidencias({ db, upd, ir, toast, params }) {
 
       <Modal open={!!inc} onClose={() => setDetalle(null)} title={inc?.folio} ancho="max-w-2xl"
         footer={<><Btn tipo="secundario" icon={FileDown} onClick={() => formatoImpreso(inc)}>Descargar formato</Btn>
-          <Btn onClick={() => { setDetalle(null); ir("valoracion", { incId: inc.id }); }}>Valoración</Btn></>}>
+          <Btn onClick={() => { setDetalle(null); setSeccion("valoracion"); setIncValorar(inc.id); }}>Valorar</Btn></>}>
         {inc && (
           <div className="space-y-3 text-sm">
             <div className="grid grid-cols-2 gap-2 text-slate-600">
@@ -3259,7 +3446,6 @@ function Valoracion({ db, upd, ir, toast, params }) {
 
   return (
     <div className="space-y-4">
-      <Titulo sub="Registro administrativo vinculado al folio de la incidencia.">Valoración de la falta</Titulo>
       {db.incidencias.length === 0 ? <Card><Vacio texto="Primero registra una incidencia." accion={<Btn onClick={() => ir("incidencias")}>Ir a incidencias</Btn>} /></Card> : (
         <>
           <Card>
@@ -3362,13 +3548,24 @@ function Bitacora({ db, upd, ir, toast }) {
   const guardar = () => {
     upd((d) => {
       if (modal.id) { const i = d.bitacoras.findIndex((b) => b.id === modal.id); d.bitacoras[i] = { ...modal, trimestre: Number(modal.trimestre), sesion: Number(modal.sesion) }; }
-      else d.bitacoras.push({ ...modal, id: uid("bit"), trimestre: Number(modal.trimestre), sesion: Number(modal.sesion) });
+      else {
+        const destinos = [modal.grupoId, ...copiarA.filter((x) => x !== modal.grupoId)];
+        destinos.forEach((gid) => d.bitacoras.push({
+          ...modal, id: uid("bit"), grupoId: gid,
+          trimestre: Number(modal.trimestre),
+          sesion: gid === modal.grupoId ? Number(modal.sesion)
+            : d.bitacoras.filter((b) => b.grupoId === gid && Number(b.trimestre) === Number(modal.trimestre)).length + 1,
+        }));
+      }
     });
-    setModal(null); toast("Bitácora guardada");
+    const n = modal.id ? 0 : copiarA.filter((x) => x !== modal.grupoId).length;
+    setModal(null); setCopiarA([]);
+    toast(n ? `Sesión guardada en ${n + 1} grupos` : "Bitácora guardada");
   };
 
   const [trimPlan, setTrimPlan] = useState(db.config.trimestre || 1);
   const [verPlan, setVerPlan] = useState(false);
+  const [copiarA, setCopiarA] = useState([]);
   const lista = db.bitacoras.filter((b) => b.grupoId === grupoId).sort((a, b) => b.fecha.localeCompare(a.fecha));
 
   const generarPlaneacion = () => {
@@ -3400,7 +3597,7 @@ function Bitacora({ db, upd, ir, toast }) {
       <Titulo sub="Registro de cada sesión: planeación, desarrollo, evaluación y reflexión docente."
         right={<div className="flex gap-2">
           <Btn size="sm" tipo="secundario" icon={ClipboardCheck} onClick={() => setVerPlan(true)} disabled={!db.bitacoras.length}>Planeación</Btn>
-          <Btn size="sm" icon={Plus} onClick={() => { setModal(nueva()); setSeccion("datos"); }} disabled={!db.grupos.length}>Nueva sesión</Btn>
+          <Btn size="sm" icon={Plus} onClick={() => { setModal(nueva()); setSeccion("datos"); setCopiarA([]); }} disabled={!db.grupos.length}>Nueva sesión</Btn>
         </div>}>Bitácora de clase</Titulo>
       <Sel value={grupoId} onChange={(e) => setGrupoId(e.target.value)} className="max-w-[170px]">{db.grupos.map((g) => <option key={g.id} value={g.id}>{etiquetaGrupo(db, g)}</option>)}</Sel>
 
@@ -3490,6 +3687,12 @@ function Bitacora({ db, upd, ir, toast }) {
                   <Area value={modal.situaciones} onChange={(e) => setModal({ ...modal, situaciones: e.target.value })} /></Campo></div>
                 <div className="sm:col-span-2"><Campo label="Acuerdos"><Area value={modal.acuerdos || ""} onChange={(e) => setModal({ ...modal, acuerdos: e.target.value })} /></Campo></div>
                 <div className="sm:col-span-2"><Campo label="Observaciones"><Area value={modal.observaciones || ""} onChange={(e) => setModal({ ...modal, observaciones: e.target.value })} /></Campo></div>
+                {!modal.id && (
+                  <div className="sm:col-span-2 border-t-2 border-slate-200 pt-3">
+                    <CopiarAGrupos db={db} grupoOrigen={modal.grupoId} seleccion={copiarA} setSeleccion={setCopiarA} />
+                    <p className="text-[11px] text-slate-500 mt-2">Cada grupo recibe su propio número de sesión. La asistencia y las observaciones no se copian.</p>
+                  </div>
+                )}
               </div>
             )}
             {seccion === "planeacion" && (
@@ -3688,6 +3891,34 @@ function Estadisticas({ db, ir }) {
     return Object.entries(meses).sort().map(([, v]) => ({ ...v, porcentaje: pct(v.A + v.J + v.P + v.R * 0.5, v.total) }));
   }, [db, grupoId]);
 
+  /* Convierte el conteo de participaciones en una actividad calificada. */
+  const convertirParticipaciones = (t) => {
+    const delGrupo = db.alumnos.filter((a) => a.grupoId === grupoId && a.activo);
+    const conteos = delGrupo.map((a) => ({ a, n: participaciones(db, a.id, { grupoId, trim: t }) }));
+    const tope = Math.max(...conteos.map((c) => c.n), 0);
+    if (!tope) return;
+    const ins = (db.catalogos.instrumentos || []).find((i) => norm(i.nombre).includes("particip"));
+    upd((d) => {
+      const act = {
+        id: uid("act"), grupoId, nombre: `Participación · trimestre ${t}`,
+        instrumentoId: ins?.id || d.catalogos.instrumentos[0]?.id || "",
+        fecha: hoy(), fechaEntrega: hoy(), trimestre: Number(t),
+        materia: d.config.asignatura || "", evidencia: "Registro de participaciones en clase",
+        campoFormativo: "", contenido: "", pda: "", eje: "", proyecto: "",
+        proposito: "Reconocer la participación durante las sesiones del trimestre",
+        descripcion: `Generada desde el registro de participaciones. El mayor número de participaciones del grupo fue ${tope}.`,
+        producto: "", valor: 10, criterios: [],
+      };
+      d.actividades.push(act);
+      conteos.forEach(({ a, n }) => d.entregas.push({
+        id: uid("ent"), actividadId: act.id, alumnoId: a.id,
+        estado: n > 0 ? "Entregada" : "No entregada",
+        calificacion: n > 0 ? Math.max(5, round(5 + (n / tope) * 5, 1)) : 0,
+      }));
+    });
+    toast(`Calificación creada para ${conteos.length} alumnos`);
+  };
+
   const pdfEstadistica = () => {
     const g2 = db.grupos.find((x) => x.id === grupoId);
     const sub = [g2 ? `${g2.grado}° ${g2.grupo}` : "Todos los grupos", trim ? `Trimestre ${trim}` : "Todo el ciclo",
@@ -3716,8 +3947,9 @@ function Estadisticas({ db, ir }) {
 
   return (
     <div className="space-y-4">
-      <Titulo sub="Consulta y comparación por grupo, trimestre y estudiante."
-        right={<Btn size="sm" tipo="secundario" icon={FileDown} onClick={pdfEstadistica}>Descargar PDF</Btn>}>Estadísticas</Titulo>
+      <div className="flex justify-end">
+        <Btn size="sm" tipo="secundario" icon={FileDown} onClick={pdfEstadistica}>Descargar esta tabla</Btn>
+      </div>
       {filtros}
       <Tabs activa={tab} set={setTab} tabs={[
         { id: "asistencia", label: "Asistencia" }, { id: "evaluacion", label: "Evaluación" },
@@ -3801,8 +4033,22 @@ function Estadisticas({ db, ir }) {
               <Stat label="Promedio por alumno" valor={filas.length ? round(suma / filas.length, 1) : 0} />
               <Stat label="Sin participar" valor={filas.filter((f) => f.total === 0).length} color={filas.some((f) => f.total === 0) ? "text-amber-700" : "text-slate-900"} />
             </div>
+            <Card>
+              <p className="text-sm font-semibold text-slate-800 mb-1">Convertir en calificación</p>
+              <p className="text-xs text-slate-500 mb-3">Crea una actividad con la calificación ya puesta: quien más participó saca 10, y de ahí para abajo en proporción. Puedes ajustar cualquier calificación después.</p>
+              <div className="flex gap-2 flex-wrap items-end">
+                <Campo label="Trimestre">
+                  <Sel value={trim || 1} onChange={(e) => setTrim(Number(e.target.value))} className="max-w-[140px]">
+                    {[1, 2, 3].map((t) => <option key={t} value={t}>Trimestre {t}</option>)}
+                  </Sel>
+                </Campo>
+                <Btn icon={Save} disabled={!grupoId || suma === 0} onClick={() => convertirParticipaciones(trim || 1)}>Generar calificación</Btn>
+              </div>
+              {!grupoId && <p className="text-xs text-amber-800 mt-2">Elige un grupo arriba para poder generarla.</p>}
+            </Card>
+
             <Card pad={false} className="p-4">
-              <p className="text-xs text-slate-500 mb-2">Ordenado de más a menos. Te sirve para poner la calificación de participación.</p>
+              <p className="text-xs text-slate-500 mb-2">Ordenado de más a menos.</p>
               <Tabla cols={["Nombre", "T1", "T2", "T3", "Total"]}>
                 {filas.map((f) => (
                   <tr key={f.a.id} className="hover:bg-slate-50 cursor-pointer" onClick={() => ir("ficha", { alumnoId: f.a.id })}>
@@ -3857,7 +4103,8 @@ function Estadisticas({ db, ir }) {
 /* ============================================================
    MÓDULO: REPORTES
    ============================================================ */
-function Reportes({ db, toast }) {
+function Reportes({ db, ir, toast }) {
+  const [cara, setCara] = useState("ver");
   const [tipo, setTipo] = useState("asistencia");
   const [grupoId, setGrupoId] = useState(db.grupos[0]?.id || "");
   const [trim, setTrim] = useState(0);
@@ -4022,7 +4269,15 @@ function Reportes({ db, toast }) {
 
   return (
     <div className="space-y-4">
-      <Titulo sub="Elige el reporte, revisa la vista previa y descárgalo. El PDF se guarda directo en tu dispositivo.">Reportes</Titulo>
+      <Titulo sub={cara === "ver"
+        ? "Consulta y compara por grupo, trimestre y estudiante."
+        : "Elige el documento, revisa la vista previa y descárgalo."}>Reportes</Titulo>
+
+      <Tabs activa={cara} set={setCara} tabs={[{ id: "ver", label: "Consultar" }, { id: "generar", label: "Generar documento" }]} />
+
+      {cara === "ver" && <Estadisticas db={db} ir={ir} />}
+
+      {cara === "generar" && (<>
       <Card>
         <div className="grid sm:grid-cols-3 gap-3">
           <Campo label="Tipo de reporte">
@@ -4049,130 +4304,13 @@ function Reportes({ db, toast }) {
 
       <Card pad={false} className="p-4">
         <p className="text-sm font-medium text-slate-700 mb-3">{r.titulo} · vista previa ({r.filas.length} filas)</p>
-        {r.filas.length === 0 ? <Vacio texto="No hay datos para este reporte." /> : (
+        {r.filas.length === 0 ? <Vacio texto="No hay datos para este documento." /> : (
           <Tabla cols={r.cols}>
             {r.filas.slice(0, 60).map((f, i) => <tr key={i} className="hover:bg-slate-50">{f.map((c, j) => <td key={j} className="py-2 px-3">{c}</td>)}</tr>)}
           </Tabla>
         )}
       </Card>
-    </div>
-  );
-}
-
-/* ============================================================
-   MÓDULO: CALENDARIO
-   ============================================================ */
-const MESES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
-const DIAS = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
-
-function Calendario({ db, upd, ir, toast }) {
-  const [vista, setVista] = useState("mes");
-  const [ref, setRef] = useState(new Date());
-  const [modal, setModal] = useState(null);
-
-  const eventos = useMemo(() => {
-    const e = [];
-    db.actividades.forEach((a) => { const g = db.grupos.find((x) => x.id === a.grupoId); e.push({ fecha: a.fechaEntrega, titulo: a.nombre, tipo: "Entrega", grupo: g ? `${g.grado}°${g.grupo}` : "", color: "bg-sky-100 text-sky-800 border-sky-200", destino: "actividades" }); });
-    db.citatorios.filter((c) => c.estado === "Pendiente" && c.fecha < hoy()).forEach((c) => {
-    const a = db.alumnos.find((x) => x.id === c.alumnoId);
-    out.push({ tipo: "Citatorios", alumnoId: c.alumnoId, texto: `${c.folio}: la cita de ${nomComp(a)} era el ${fFecha(c.fecha)} y sigue pendiente`, nivel: "naranja" });
-  });
-  db.permisos.forEach((p) => { const g = db.grupos.find((x) => x.id === p.grupoId); e.push({ fecha: p.fecha, titulo: p.nombre, tipo: "Actividad escolar", grupo: g ? `${g.grado}°${g.grupo}` : "", color: "bg-violet-100 text-violet-800 border-violet-200", destino: "permisos" }); });
-    db.ecoems.forEach((s) => { if (!e.find((x) => x.fecha === s.fecha && x.tipo === "ECOEMS" && x.titulo.includes(s.numero))) e.push({ fecha: s.fecha, titulo: `Simulador ${s.numero}`, tipo: "ECOEMS", grupo: "", color: "bg-emerald-100 text-emerald-800 border-emerald-200", destino: "ecoems" }); });
-    db.bitacoras.forEach((b) => { const g = db.grupos.find((x) => x.id === b.grupoId); e.push({ fecha: b.fecha, titulo: `Sesión ${b.sesion}: ${b.contenido || "clase"}`, tipo: "Bitácora", grupo: g ? `${g.grado}°${g.grupo}` : "", color: "bg-slate-100 text-slate-700 border-slate-200", destino: "bitacora" }); });
-    db.valoraciones.filter((v) => v.fechaSeguimiento).forEach((v) => { const i = db.incidencias.find((x) => x.id === v.incidenciaId); e.push({ fecha: v.fechaSeguimiento, titulo: `Seguimiento ${i?.folio || ""}`, tipo: "Seguimiento", grupo: "", color: "bg-amber-100 text-amber-800 border-amber-200", destino: "valoracion" }); });
-    (db.eventos || []).forEach((v) => e.push({ ...v, color: "bg-rose-100 text-rose-800 border-rose-200", tipo: v.tipo || "Evento", destino: "calendario", propio: true }));
-    return e;
-  }, [db]);
-
-  const evDe = (f) => eventos.filter((e) => e.fecha === f);
-  const guardarEv = () => {
-    if (!modal.titulo) return toast("Escribe el nombre del evento", "error");
-    upd((d) => { d.eventos = [...(d.eventos || []), { id: uid("ev"), titulo: modal.titulo, fecha: modal.fecha, tipo: modal.tipo }]; });
-    setModal(null); toast("Evento agregado");
-  };
-
-  const y = ref.getFullYear(), m = ref.getMonth();
-  const primero = new Date(y, m, 1).getDay();
-  const dias = new Date(y, m + 1, 0).getDate();
-  const celdas = [...Array(primero).fill(null), ...Array.from({ length: dias }, (_, i) => i + 1)];
-  const iso = (d) => `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-
-  const inicioSemana = new Date(ref); inicioSemana.setDate(ref.getDate() - ref.getDay());
-  const semana = Array.from({ length: 7 }, (_, i) => { const d = new Date(inicioSemana); d.setDate(inicioSemana.getDate() + i); return d; });
-  const mover = (n) => { const d = new Date(ref); if (vista === "mes") d.setMonth(d.getMonth() + n); else if (vista === "semana") d.setDate(d.getDate() + n * 7); else d.setDate(d.getDate() + n); setRef(d); };
-
-  return (
-    <div className="space-y-4">
-      <Titulo sub="Clases, entregas, actividades escolares, simuladores y seguimientos."
-        right={<Btn size="sm" icon={Plus} onClick={() => setModal({ titulo: "", fecha: hoy(), tipo: "Evento" })}>Agregar evento</Btn>}>Calendario</Titulo>
-      <div className="flex items-center justify-between gap-2 flex-wrap">
-        <div className="flex items-center gap-1">
-          <Btn size="sm" tipo="secundario" onClick={() => mover(-1)}><ChevronLeft size={15} /></Btn>
-          <span className="text-sm font-medium text-slate-800 px-2 min-w-[150px] text-center">
-            {vista === "mes" ? `${MESES[m]} ${y}` : vista === "semana" ? `${fFecha(semana[0].toISOString().slice(0, 10))} al ${fFecha(semana[6].toISOString().slice(0, 10))}` : fFecha(ref.toISOString().slice(0, 10))}
-          </span>
-          <Btn size="sm" tipo="secundario" onClick={() => mover(1)}><ChevronRight size={15} /></Btn>
-          <Btn size="sm" tipo="fantasma" onClick={() => setRef(new Date())}>Hoy</Btn>
-        </div>
-        <Tabs activa={vista} set={setVista} tabs={[{ id: "dia", label: "Día" }, { id: "semana", label: "Semana" }, { id: "mes", label: "Mes" }]} />
-      </div>
-
-      {vista === "mes" && (
-        <Card pad={false} className="p-2 overflow-x-auto">
-          <div className="grid grid-cols-7 gap-1 min-w-[560px]">
-            {DIAS.map((d) => <div key={d} className="text-center text-[11px] font-medium text-slate-400 py-1">{d}</div>)}
-            {celdas.map((d, i) => (
-              <div key={i} className={`min-h-[76px] rounded-lg p-1 border ${d ? "border-slate-100" : "border-transparent"} ${d && iso(d) === hoy() ? "bg-emerald-50 border-emerald-200" : ""}`}>
-                {d && <>
-                  <p className="text-[11px] text-slate-500 mb-0.5">{d}</p>
-                  {evDe(iso(d)).slice(0, 3).map((e, j) => (
-                    <button key={j} onClick={() => ir(e.destino)} className={`block w-full text-left text-[10px] px-1 py-0.5 rounded mb-0.5 border truncate ${e.color}`}>{e.titulo}</button>
-                  ))}
-                  {evDe(iso(d)).length > 3 && <p className="text-[10px] text-slate-400">+{evDe(iso(d)).length - 3} más</p>}
-                </>}
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
-
-      {vista === "semana" && (
-        <div className="space-y-2">
-          {semana.map((d, i) => { const f = d.toISOString().slice(0, 10);
-            return (
-              <Card key={i} className={f === hoy() ? "border-emerald-300" : ""}>
-                <p className="text-sm font-medium text-slate-800">{DIAS[d.getDay()]} {d.getDate()} de {MESES[d.getMonth()].toLowerCase()}</p>
-                <div className="mt-2 space-y-1">
-                  {evDe(f).length === 0 ? <p className="text-xs text-slate-400">Sin registros</p> :
-                    evDe(f).map((e, j) => <button key={j} onClick={() => ir(e.destino)} className={`block w-full text-left text-xs px-2 py-1.5 rounded-lg border ${e.color}`}><span className="font-medium">{e.tipo}</span> · {e.titulo} {e.grupo && `· ${e.grupo}`}</button>)}
-                </div>
-              </Card>
-            ); })}
-        </div>
-      )}
-
-      {vista === "dia" && (
-        <Card>
-          <p className="text-sm font-medium text-slate-800 mb-3">{fFecha(ref.toISOString().slice(0, 10))}</p>
-          {evDe(ref.toISOString().slice(0, 10)).length === 0 ? <Vacio texto="No hay nada registrado en este día." /> : (
-            <div className="space-y-1.5">
-              {evDe(ref.toISOString().slice(0, 10)).map((e, j) => <button key={j} onClick={() => ir(e.destino)} className={`block w-full text-left text-sm px-3 py-2 rounded-lg border ${e.color}`}><span className="font-medium">{e.tipo}</span> · {e.titulo} {e.grupo && `· ${e.grupo}`}</button>)}
-            </div>
-          )}
-        </Card>
-      )}
-
-      <Modal open={!!modal} onClose={() => setModal(null)} title="Agregar evento" ancho="max-w-md"
-        footer={<><Btn tipo="secundario" onClick={() => setModal(null)}>Cancelar</Btn><Btn icon={Save} onClick={guardarEv}>Guardar</Btn></>}>
-        {modal && (
-          <div className="space-y-3">
-            <Campo label="Nombre" req><Inp value={modal.titulo} onChange={(e) => setModal({ ...modal, titulo: e.target.value })} /></Campo>
-            <Campo label="Fecha"><Inp type="date" value={modal.fecha} onChange={(e) => setModal({ ...modal, fecha: e.target.value })} /></Campo>
-            <Campo label="Tipo"><Sel value={modal.tipo} onChange={(e) => setModal({ ...modal, tipo: e.target.value })}>{["Evento", "Examen", "Proyecto", "Junta", "Simulador", "Otro"].map((t) => <option key={t}>{t}</option>)}</Sel></Campo>
-          </div>
-        )}
-      </Modal>
+      </>)}
     </div>
   );
 }
@@ -4664,11 +4802,8 @@ const DOMINIO = {
   evaluacion:    { nombre: "Académico",   banda: "bg-sky-700",     texto: "text-sky-100",     punto: "bg-sky-500" },
   ecoems:        { nombre: "ECOEMS",      banda: "bg-amber-700",   texto: "text-amber-100",   punto: "bg-amber-500" },
   incidencias:   { nombre: "Convivencia", banda: "bg-rose-700",    texto: "text-rose-100",    punto: "bg-rose-500" },
-  valoracion:    { nombre: "Convivencia", banda: "bg-rose-700",    texto: "text-rose-100",    punto: "bg-rose-500" },
   bitacora:      { nombre: "Bitácora",    banda: "bg-slate-800",   texto: "text-slate-200",   punto: "bg-slate-500" },
-  estadisticas:  { nombre: "Estadísticas",banda: "bg-slate-800",   texto: "text-slate-200",   punto: "bg-slate-500" },
   reportes:      { nombre: "Reportes",    banda: "bg-slate-800",   texto: "text-slate-200",   punto: "bg-slate-500" },
-  calendario:    { nombre: "Calendario",  banda: "bg-slate-800",   texto: "text-slate-200",   punto: "bg-slate-500" },
   configuracion: { nombre: "Ajustes",     banda: "bg-slate-800",   texto: "text-slate-200",   punto: "bg-slate-500" },
 };
 const dominioDe = (v) => DOMINIO[v] || DOMINIO.inicio;
@@ -4682,15 +4817,12 @@ const MENU = [
   { id: "actividades", label: "Actividades", icon: BookOpen },
   { id: "evaluacion", label: "Evaluación", icon: BarChart3 },
   { id: "ecoems", label: "ECOEMS", icon: Target },
-  { id: "incidencias", label: "Incidencias", icon: AlertTriangle },
-  { id: "valoracion", label: "Valoración", icon: ClipboardList },
+  { id: "incidencias", label: "Convivencia", icon: AlertTriangle },
   { id: "bitacora", label: "Bitácora", icon: NotebookPen },
-  { id: "estadisticas", label: "Estadísticas", icon: TrendingUp },
-  { id: "reportes", label: "Reportes", icon: Printer },
-  { id: "calendario", label: "Calendario", icon: Calendar },
+  { id: "reportes", label: "Reportes", icon: TrendingUp },
   { id: "configuracion", label: "Configuración", icon: Settings },
 ];
-const MENU_MOVIL = ["inicio", "asistencia", "alumnos", "incidencias", "reportes"];
+const MENU_MOVIL = ["inicio", "asistencia", "alumnos", "incidencias", "reportes"];   // los cinco de uso diario
 
 export default function App() {
   const [meta, setMeta] = useState(null);
@@ -4816,9 +4948,7 @@ export default function App() {
     incidencias: <Incidencias {...props} />,
     valoracion: <Valoracion {...props} />,
     bitacora: <Bitacora {...props} />,
-    estadisticas: <Estadisticas db={db} ir={ir} />,
-    reportes: <Reportes db={db} toast={toast} />,
-    calendario: <Calendario db={db} upd={upd} ir={ir} toast={toast} />,
+    reportes: <Reportes db={db} ir={ir} toast={toast} />,
     configuracion: <Configuracion db={db} upd={upd} meta={meta} setCiclo={setCiclo} nuevoCiclo={nuevoCiclo} restaurar={restaurar} toast={toast} perfil={perfil} setPerfil={setPerfil} />,
   };
 
