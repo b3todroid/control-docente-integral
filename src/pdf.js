@@ -384,3 +384,231 @@ export function pdfPermisos({ permiso, grupo, config, ciclo, autorizados, pendie
   doc.save(nombreArchivo(permiso.nombre));
   return true;
 }
+
+/* ============================================================
+   5. Citatorio para madre, padre o tutor
+   ============================================================ */
+
+export function pdfCitatorio({ cita, alumno, grupo, tutor, config, ciclo, respaldo }) {
+  const doc = nuevoDoc("p");
+  const ancho = doc.internal.pageSize.getWidth();
+
+  doc.setFillColor(...VERDE);
+  doc.rect(0, 0, ancho, 3, "F");
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(12);
+  doc.setTextColor(...TINTA);
+  doc.text((config?.escuela || "Escuela").toUpperCase(), ancho / 2, 14, { align: "center", maxWidth: ancho - 28 });
+  doc.setFontSize(10.5);
+  doc.text("CITATORIO", ancho / 2, 20.5, { align: "center" });
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.setTextColor(...GRIS);
+  doc.text([`Folio ${cita.folio}`, config?.cct ? `CCT ${config.cct}` : "", `Ciclo ${ciclo}`].filter(Boolean).join("   ·   "), ancho / 2, 25.5, { align: "center" });
+
+  let y = 36;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9.5);
+  doc.setTextColor(...TINTA);
+  const saludo = tutor ? `${tutor}:` : "A quien corresponda:";
+  doc.text(saludo, 14, y);
+  y += 8;
+
+  const cuerpo = `Por este medio se le cita para tratar un asunto relacionado con ${alumno}, de ${grupo}. Agradeceré su puntual asistencia.`;
+  doc.text(doc.splitTextToSize(cuerpo, ancho - 28), 14, y);
+  y += 14;
+
+  autoTable(doc, {
+    startY: y,
+    body: [
+      ["Día de la cita", fFecha(cita.fecha), "Hora", cita.hora || "—"],
+      ["Lugar", cita.lugar || "—", "Atiende", cita.docente || "—"],
+      ["Motivo", { content: cita.motivo || "—", colSpan: 3 }],
+    ],
+    theme: "grid",
+    bodyStyles: { fontSize: 9, cellPadding: 2.5, textColor: TINTA },
+    columnStyles: {
+      0: { fillColor: GRIS_CLARO, fontStyle: "bold", cellWidth: 34 },
+      1: { cellWidth: 52 },
+      2: { fillColor: GRIS_CLARO, fontStyle: "bold", cellWidth: 26 },
+      3: { cellWidth: "auto" },
+    },
+    styles: { lineColor: [203, 213, 225], lineWidth: 0.1 },
+    margin: { left: 14, right: 14 },
+  });
+  y = doc.lastAutoTable.finalY + 6;
+
+  if (cita.detalle && cita.detalle.trim()) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8.5);
+    doc.text("DETALLE", 14, y);
+    y += 2;
+    const lineas = doc.splitTextToSize(cita.detalle, ancho - 34);
+    const alto = Math.max(16, lineas.length * 4.2 + 5);
+    doc.setDrawColor(203, 213, 225);
+    doc.roundedRect(14, y, ancho - 28, alto, 1, 1, "S");
+    doc.setFont("helvetica", "normal");
+    doc.text(lineas, 17, y + 5);
+    y += alto + 6;
+  }
+
+  if (respaldo?.length) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8.5);
+    doc.setTextColor(...TINTA);
+    doc.text("SITUACIÓN ACTUAL DEL ESTUDIANTE", 14, y);
+    autoTable(doc, {
+      startY: y + 2,
+      head: [respaldo.map((r) => r.label)],
+      body: [respaldo.map((r) => String(r.valor))],
+      theme: "grid",
+      headStyles: { fillColor: GRIS_CLARO, textColor: TINTA, fontSize: 8, fontStyle: "bold", cellPadding: 2, halign: "center" },
+      bodyStyles: { fontSize: 11, fontStyle: "bold", cellPadding: 3, textColor: TINTA, halign: "center" },
+      styles: { lineColor: [203, 213, 225], lineWidth: 0.1 },
+      margin: { left: 14, right: 14 },
+    });
+    y = doc.lastAutoTable.finalY + 8;
+  }
+
+  // acuse y firmas
+  doc.setDrawColor(...GRIS);
+  doc.setLineWidth(0.2);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.setTextColor(...GRIS);
+  doc.text("Recibí el presente citatorio y me doy por enterado(a).", 14, y);
+  y += 20;
+
+  const anchoF = (ancho - 28) / 2;
+  [["Firma de quien cita", 0], ["Firma de madre, padre o tutor", 1]].forEach(([t, col]) => {
+    const x = 14 + col * anchoF;
+    doc.line(x + 6, y, x + anchoF - 10, y);
+    doc.text(t, x + anchoF / 2 - 2, y + 4.5, { align: "center", maxWidth: anchoF - 8 });
+  });
+  y += 16;
+
+  doc.setFontSize(7);
+  doc.text("Este documento es un registro administrativo de comunicación con la familia. No sustituye los procedimientos que establezca la autoridad escolar.", 14, y, { maxWidth: ancho - 28 });
+
+  pie(doc);
+  doc.save(nombreArchivo("citatorio", cita.folio));
+  return true;
+}
+
+/* ============================================================
+   6. Planeación didáctica
+   ============================================================ */
+
+export function pdfPlaneacion({ sesiones, datos, config, ciclo, periodo }) {
+  const doc = nuevoDoc("p");
+  const ancho = doc.internal.pageSize.getWidth();
+  let y = encabezado(doc, { titulo: "Planeación didáctica", subtitulo: periodo, config, ciclo });
+
+  autoTable(doc, {
+    startY: y,
+    body: [
+      ["Docente", datos.docente || "—", "Asignatura", datos.asignatura || "—"],
+      ["Grado y grupo", datos.grupo || "—", "Periodo", datos.periodo || "—"],
+    ],
+    theme: "grid",
+    bodyStyles: { fontSize: 8.5, cellPadding: 2, textColor: TINTA },
+    columnStyles: {
+      0: { fillColor: GRIS_CLARO, fontStyle: "bold", cellWidth: 32 },
+      1: { cellWidth: 54 },
+      2: { fillColor: GRIS_CLARO, fontStyle: "bold", cellWidth: 30 },
+      3: { cellWidth: "auto" },
+    },
+    styles: { lineColor: [203, 213, 225], lineWidth: 0.1 },
+    margin: { left: 14, right: 14 },
+  });
+  y = doc.lastAutoTable.finalY + 8;
+
+  sesiones.forEach((s, idx) => {
+    if (y > doc.internal.pageSize.getHeight() - 70) {
+      doc.addPage();
+      y = 20;
+    }
+
+    doc.setFillColor(...VERDE);
+    doc.rect(14, y, ancho - 28, 7, "F");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.setTextColor(255, 255, 255);
+    doc.text(`Sesión ${s.sesion}  ·  ${fFecha(s.fecha)}${s.horario ? "  ·  " + s.horario : ""}`, 17, y + 4.9);
+    y += 10;
+
+    autoTable(doc, {
+      startY: y,
+      body: [
+        ["Campo formativo", s.campoFormativo || "—"],
+        ["Contenido", s.contenido || "—"],
+        ["Proceso de desarrollo de aprendizaje", s.pda || "—"],
+        ["Eje articulador", s.eje || "—"],
+        ["Propósito", s.proposito || "—"],
+      ],
+      theme: "grid",
+      bodyStyles: { fontSize: 8, cellPadding: 2, textColor: TINTA },
+      columnStyles: { 0: { fillColor: GRIS_CLARO, fontStyle: "bold", cellWidth: 48 }, 1: { cellWidth: "auto" } },
+      styles: { lineColor: [226, 232, 240], lineWidth: 0.1, overflow: "linebreak" },
+      margin: { left: 14, right: 14, bottom: 18 },
+    });
+    y = doc.lastAutoTable.finalY + 3;
+
+    autoTable(doc, {
+      startY: y,
+      head: [["Momento", "Actividades"]],
+      body: [
+        ["Inicio", [s.inicioAct, s.inicioPregunta ? `Pregunta detonadora: ${s.inicioPregunta}` : "", s.inicioPrevios ? `Conocimientos previos: ${s.inicioPrevios}` : ""].filter(Boolean).join("\n") || "—"],
+        ["Desarrollo", [s.desarrollo, s.estrategias ? `Estrategias: ${s.estrategias}` : "", s.individual ? `Individual: ${s.individual}` : "", s.colaborativo ? `Colaborativo: ${s.colaborativo}` : ""].filter(Boolean).join("\n") || "—"],
+        ["Cierre", [s.cierreProducto ? `Producto: ${s.cierreProducto}` : "", s.cierreReflexion, s.cierreTarea ? `Tarea: ${s.cierreTarea}` : ""].filter(Boolean).join("\n") || "—"],
+      ],
+      theme: "grid",
+      headStyles: { fillColor: [241, 245, 249], textColor: TINTA, fontSize: 8, fontStyle: "bold", cellPadding: 2 },
+      bodyStyles: { fontSize: 8, cellPadding: 2, textColor: TINTA },
+      columnStyles: { 0: { fontStyle: "bold", cellWidth: 26 }, 1: { cellWidth: "auto" } },
+      styles: { lineColor: [226, 232, 240], lineWidth: 0.1, overflow: "linebreak" },
+      margin: { left: 14, right: 14, bottom: 18 },
+    });
+    y = doc.lastAutoTable.finalY + 3;
+
+    autoTable(doc, {
+      startY: y,
+      body: [
+        ["Recursos", s.recursos || "—", "Evidencia", s.evalEvidencia || s.cierreEvidencia || "—"],
+        ["Instrumento de evaluación", s.evalInstrumento || "—", "Estado", s.estado || "—"],
+      ],
+      theme: "grid",
+      bodyStyles: { fontSize: 8, cellPadding: 2, textColor: TINTA },
+      columnStyles: {
+        0: { fillColor: GRIS_CLARO, fontStyle: "bold", cellWidth: 40 },
+        1: { cellWidth: 48 },
+        2: { fillColor: GRIS_CLARO, fontStyle: "bold", cellWidth: 26 },
+        3: { cellWidth: "auto" },
+      },
+      styles: { lineColor: [226, 232, 240], lineWidth: 0.1, overflow: "linebreak" },
+      margin: { left: 14, right: 14, bottom: 18 },
+    });
+    y = doc.lastAutoTable.finalY + (idx === sesiones.length - 1 ? 6 : 9);
+  });
+
+  if (y > doc.internal.pageSize.getHeight() - 45) {
+    doc.addPage();
+    y = 24;
+  }
+  y += 12;
+  const anchoF = (ancho - 28) / 2;
+  doc.setDrawColor(...GRIS);
+  doc.setLineWidth(0.2);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7.5);
+  doc.setTextColor(...GRIS);
+  [["Elaboró (docente)", 0], ["Visto bueno (dirección)", 1]].forEach(([t, col]) => {
+    const x = 14 + col * anchoF;
+    doc.line(x + 6, y, x + anchoF - 10, y);
+    doc.text(t, x + anchoF / 2 - 2, y + 4.5, { align: "center" });
+  });
+
+  pie(doc);
+  doc.save(nombreArchivo("planeacion"));
+  return true;
+}
