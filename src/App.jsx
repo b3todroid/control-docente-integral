@@ -42,6 +42,8 @@ const EST_INC = ["Abierta", "En seguimiento", "Cerrada"];
 const EST_ACT = ["Pendiente", "Entregada", "Fuera de tiempo", "No entregada"];
 const EST_BIT = ["Concluida", "Parcialmente concluida", "Reprogramada", "Suspendida"];
 const EST_ALUMNO = ["Activo", "Baja", "Traslado"];
+const MESES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+  "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
 const CALIFS = [5, 6, 7, 8, 9, 10];        // escala de la boleta
 const MAX_MATERIAS_BOLETA = 11;
 const MAX_CLASES = 99;            // clases por trimestre; con clase diaria son unas 60
@@ -3885,7 +3887,8 @@ function Estadisticas({ db, ir }) {
     const meses = {};
     db.asistencias.filter((x) => (!grupoId || x.grupoId === grupoId)).forEach((x) => {
       const k = x.fecha.slice(0, 7);
-      meses[k] = meses[k] || { nombre: `${MESES[Number(k.slice(5, 7)) - 1].slice(0, 3)} ${k.slice(2, 4)}`, A: 0, F: 0, J: 0, R: 0, P: 0, total: 0 };
+      const mes = MESES[Number(k.slice(5, 7)) - 1] || k.slice(5, 7);
+      meses[k] = meses[k] || { nombre: `${mes.slice(0, 3)} ${k.slice(2, 4)}`, A: 0, F: 0, J: 0, R: 0, P: 0, total: 0 };
       Object.values(x.marcas || {}).forEach((m) => { meses[k][m] = (meses[k][m] || 0) + 1; meses[k].total++; });
     });
     return Object.entries(meses).sort().map(([, v]) => ({ ...v, porcentaje: pct(v.A + v.J + v.P + v.R * 0.5, v.total) }));
